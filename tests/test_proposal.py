@@ -49,7 +49,7 @@ def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
     monkeypatch.setenv("KROGER_CLIENT_SECRET", "secret")
     monkeypatch.setenv("KROGER_BASE_URL", "https://api.kroger.com")
 
-    monkeypatch.setattr("kroget.cli.load_staples", lambda: [staple])
+    monkeypatch.setattr("kroget.cli.get_staples", lambda **_: [staple])
     monkeypatch.setattr(
         "kroget.core.proposal.auth.get_client_credentials_token",
         lambda **_: _dummy_token(),
@@ -94,7 +94,7 @@ def test_staples_propose_searches(monkeypatch, tmp_path):
     monkeypatch.setenv("KROGER_CLIENT_SECRET", "secret")
     monkeypatch.setenv("KROGER_BASE_URL", "https://api.kroger.com")
 
-    monkeypatch.setattr("kroget.cli.load_staples", lambda: [staple])
+    monkeypatch.setattr("kroget.cli.get_staples", lambda **_: [staple])
     monkeypatch.setattr(
         "kroget.core.proposal.auth.get_client_credentials_token",
         lambda **_: _dummy_token(),

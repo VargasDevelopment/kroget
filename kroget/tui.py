@@ -19,7 +19,13 @@ from kroget.core.storage import (
     Staple,
     TokenStore,
     add_staple,
-    load_staples,
+    create_list,
+    delete_list,
+    get_active_list,
+    get_staples,
+    list_names,
+    rename_list,
+    set_active_list,
     update_staple,
 )
 from kroget.kroger import auth
@@ -203,6 +209,146 @@ class UPCSelectScreen(ModalScreen[str | None]):
             self.dismiss(None)
 
 
+class ListNameScreen(ModalScreen[str | None]):
+    def __init__(self, title: str, default_name: str = "") -> None:
+        super().__init__()
+        self.title = title
+        self.default_name = default_name
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.title, id="confirm_message")
+        yield Input(value=self.default_name, id="list_name")
+        with Horizontal(id="confirm_buttons"):
+            yield Button("Save", id="confirm_yes", variant="success")
+            yield Button("Cancel", id="confirm_no", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#list_name", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm_no":
+            self.dismiss(None)
+            return
+        name = self.query_one("#list_name", Input).value.strip()
+        self.dismiss(name if name else None)
+
+
+class ListManagerScreen(ModalScreen[None]):
+    def __init__(self, app_ref: "KrogetApp") -> None:
+        super().__init__()
+        self.app_ref = app_ref
+
+    def compose(self) -> ComposeResult:
+        yield Static("Manage Lists", id="confirm_message")
+        table = DataTable(id="list_table")
+        table.add_columns("Active", "Name")
+        yield table
+        with Horizontal(id="confirm_buttons"):
+            yield Button("Set Active", id="list_set", variant="success")
+            yield Button("Create", id="list_create", variant="primary")
+            yield Button("Rename", id="list_rename", variant="primary")
+            yield Button("Delete", id="list_delete", variant="error")
+            yield Button("Close", id="confirm_no", variant="default")
+
+    def on_mount(self) -> None:
+        self._refresh()
+        self.query_one("#list_table", DataTable).focus()
+
+    def _refresh(self) -> None:
+        table = self.query_one("#list_table", DataTable)
+        table.clear()
+        names = list_names()
+        active = get_active_list()
+        for index, name in enumerate(names):
+            marker = "●" if name == active else ""
+            table.add_row(marker, name, key=str(index))
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        return
+
+    def _selected_name(self) -> str | None:
+        names = list_names()
+        if not names:
+            return None
+        table = self.query_one("#list_table", DataTable)
+        index = table.cursor_row
+        if index >= len(names):
+            return None
+        return names[index]
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm_no":
+            self.dismiss(None)
+            return
+        if event.button.id == "list_set":
+            name = self._selected_name()
+            if not name:
+                return
+            try:
+                set_active_list(name)
+                self.app_ref.on_list_changed()
+                self._refresh()
+            except ValueError as exc:
+                self.app_ref._set_status(str(exc), error=True)
+            return
+        if event.button.id == "list_create":
+            self.app_ref.push_screen(
+                ListNameScreen("Create list"),
+                lambda name: self._handle_create(name),
+            )
+            return
+        if event.button.id == "list_rename":
+            current = self._selected_name() or ""
+            self.app_ref.push_screen(
+                ListNameScreen("Rename list", default_name=current),
+                lambda name: self._handle_rename(current, name),
+            )
+            return
+        if event.button.id == "list_delete":
+            name = self._selected_name()
+            if not name:
+                return
+            self.app_ref.push_screen(
+                ConfirmScreen(f"Delete list '{name}'?", yes_label="Delete", no_label="Cancel"),
+                lambda confirmed: self._handle_delete(name, confirmed),
+            )
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+            event.stop()
+
+    def _handle_create(self, name: str | None) -> None:
+        if not name:
+            return
+        try:
+            create_list(name)
+            self.app_ref.on_list_changed()
+            self._refresh()
+        except ValueError as exc:
+            self.app_ref._set_status(str(exc), error=True)
+
+    def _handle_rename(self, old: str, new: str | None) -> None:
+        if not new:
+            return
+        try:
+            rename_list(old, new)
+            self.app_ref.on_list_changed()
+            self._refresh()
+        except ValueError as exc:
+            self.app_ref._set_status(str(exc), error=True)
+
+    def _handle_delete(self, name: str, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        try:
+            delete_list(name)
+            self.app_ref.on_list_changed()
+            self._refresh()
+        except ValueError as exc:
+            self.app_ref._set_status(str(exc), error=True)
+
+
 class KrogetApp(App):
     CSS = """
     #main {
@@ -282,7 +428,9 @@ class KrogetApp(App):
         ("d", "delete", "Remove"),
         ("a", "apply", "Apply"),
         ("s", "save_staple", "Save staple"),
+        ("l", "lists", "Lists"),
         ("/", "focus_search", "Search"),
+        ("escape", "back", "Back"),
         ("q", "quit", "Quit"),
     ]
 
@@ -292,6 +440,7 @@ class KrogetApp(App):
         super().__init__()
         self.config = KrogerConfig.from_env()
         self.location_id = ConfigStore().load().default_location_id
+        self.active_list = get_active_list()
         self.staples: list[Staple] = []
         self.proposal: Proposal | None = None
         self.pinned: dict[str, bool] = {}
@@ -360,10 +509,12 @@ class KrogetApp(App):
     def _update_header(self) -> None:
         auth_status = "logged in" if TokenStore().load() else "not logged in"
         location = self.location_id or "none"
-        self.sub_title = f"Location: {location} | Auth: {auth_status}"
+        self.active_list = get_active_list()
+        self.sub_title = f"List: {self.active_list} | Location: {location} | Auth: {auth_status}"
 
     def refresh_data(self) -> None:
-        self.staples = load_staples()
+        self.active_list = get_active_list()
+        self.staples = get_staples(list_name=self.active_list)
         if not self.staples:
             self.proposal = None
             self._populate_tables()
@@ -380,6 +531,7 @@ class KrogetApp(App):
                 config=self.config,
                 staples=self.staples,
                 location_id=self.location_id,
+                list_name=self.active_list,
                 auto_pin=False,
                 confirm_pin=None,
             )
@@ -388,6 +540,10 @@ class KrogetApp(App):
             self.proposal = None
             self._set_status(f"Error generating proposal: {exc}", error=True)
         self._populate_tables()
+
+    def on_list_changed(self) -> None:
+        self._update_header()
+        self.refresh_data()
 
     def _populate_tables(self) -> None:
         staples_table = self.query_one("#staples", DataTable)
@@ -532,6 +688,16 @@ class KrogetApp(App):
             return
         self._save_search_as_staple()
 
+    def action_lists(self) -> None:
+        self.push_screen(ListManagerScreen(self))
+
+    def action_back(self) -> None:
+        if self.screen.is_modal:
+            return
+        if self.active_view == "search":
+            self._show_planner_view()
+            self._set_status("Back to planner.")
+
     def _handle_confirm(self, confirmed: bool) -> None:
         if not confirmed:
             self._set_status("Apply canceled.")
@@ -578,7 +744,7 @@ class KrogetApp(App):
         chosen = item.alternatives[self.selection.alternative_index]
 
         try:
-            update_staple(item.name, preferred_upc=chosen.upc)
+            update_staple(item.name, preferred_upc=chosen.upc, list_name=self.active_list)
         except ValueError as exc:
             self._set_status(str(exc), error=True)
             return
@@ -945,6 +1111,7 @@ class KrogetApp(App):
                     quantity=quantity,
                     preferred_upc=upc,
                     modality=modality,
+                    list_name=self.active_list,
                 )
             else:
                 add_staple(
@@ -954,7 +1121,8 @@ class KrogetApp(App):
                         quantity=quantity,
                         preferred_upc=upc,
                         modality=modality,
-                    )
+                    ),
+                    list_name=self.active_list,
                 )
             record_recent_search(term=term, upc=upc, description=name)
             self.call_from_thread(self._set_status, f"Saved staple '{name}'.")
@@ -1004,7 +1172,7 @@ class KrogetApp(App):
             self.call_from_thread(self._set_status, "No matching staple to pin.", error=True)
             return
         try:
-            update_staple(match.name, preferred_upc=upc)
+            update_staple(match.name, preferred_upc=upc, list_name=self.active_list)
         except ValueError as exc:
             self.call_from_thread(self._set_status, str(exc), error=True)
             return

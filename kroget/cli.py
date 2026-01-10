@@ -19,8 +19,14 @@ from kroget.core.storage import (
     Staple,
     TokenStore,
     add_staple,
-    load_staples,
+    create_list,
+    delete_list,
+    get_active_list,
+    get_staples,
+    list_names,
     remove_staple,
+    rename_list,
+    set_active_list,
     update_staple,
 )
 from kroget.kroger import auth
@@ -34,6 +40,7 @@ locations_app = typer.Typer(help="Location commands")
 openapi_app = typer.Typer(help="OpenAPI utilities")
 staples_app = typer.Typer(help="Staples commands")
 proposal_app = typer.Typer(help="Proposal commands")
+lists_app = typer.Typer(help="List management commands")
 
 app.add_typer(products_app, name="products")
 app.add_typer(auth_app, name="auth")
@@ -42,6 +49,7 @@ app.add_typer(locations_app, name="locations")
 app.add_typer(openapi_app, name="openapi")
 app.add_typer(staples_app, name="staples")
 app.add_typer(proposal_app, name="proposal")
+app.add_typer(lists_app, name="lists")
 
 console = Console()
 
@@ -299,6 +307,7 @@ def staples_add(
     quantity: int = typer.Option(1, "--qty", min=1, help="Quantity"),
     upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
     modality: str = typer.Option("PICKUP", "--modality", help="PICKUP or DELIVERY"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
 ) -> None:
     """Add a staple item."""
     modality = modality.upper()
@@ -313,7 +322,7 @@ def staples_add(
         modality=modality,
     )
     try:
-        add_staple(staple)
+        add_staple(staple, list_name=list_name)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
@@ -321,9 +330,16 @@ def staples_add(
 
 
 @staples_app.command("list")
-def staples_list(as_json: bool = typer.Option(False, "--json", help="Output raw JSON")) -> None:
+def staples_list(
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+) -> None:
     """List staples."""
-    staples = load_staples()
+    try:
+        staples = get_staples(list_name=list_name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
     if as_json:
         payload = {"staples": [staple.to_dict() for staple in staples]}
         console.print_json(json.dumps(payload))
@@ -333,10 +349,13 @@ def staples_list(as_json: bool = typer.Option(False, "--json", help="Output raw 
 
 
 @staples_app.command("remove")
-def staples_remove(name: str = typer.Argument(..., help="Staple name")) -> None:
+def staples_remove(
+    name: str = typer.Argument(..., help="Staple name"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+) -> None:
     """Remove a staple."""
     try:
-        remove_staple(name)
+        remove_staple(name, list_name=list_name)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
@@ -350,6 +369,7 @@ def staples_set(
     quantity: int | None = typer.Option(None, "--qty", min=1, help="Quantity"),
     upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
     modality: str | None = typer.Option(None, "--modality", help="PICKUP or DELIVERY"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
 ) -> None:
     """Update a staple."""
     if modality is not None:
@@ -364,6 +384,7 @@ def staples_set(
             quantity=quantity,
             preferred_upc=upc,
             modality=modality,
+            list_name=list_name,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -377,6 +398,7 @@ def staples_propose(
     out: Path = typer.Option(Path("proposal.json"), "--out", help="Output proposal path"),
     as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
     auto_pin: bool = typer.Option(False, "--auto-pin", help="Auto-pin UPCs"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
 ) -> None:
     """Generate a proposal from staples."""
     config = _load_config()
@@ -385,7 +407,11 @@ def staples_propose(
         console.print("[red]Location ID required.[/red] Use --location-id or set default.")
         raise typer.Exit(code=1)
 
-    staples = load_staples()
+    try:
+        staples = get_staples(list_name=list_name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
     if not staples:
         console.print("[yellow]No staples configured.[/yellow]")
         raise typer.Exit(code=1)
@@ -398,6 +424,7 @@ def staples_propose(
             config=config,
             staples=staples,
             location_id=resolved_location_id,
+            list_name=list_name,
             auto_pin=auto_pin,
             confirm_pin=None if auto_pin else confirm_pin,
         )
@@ -569,6 +596,63 @@ def openapi_check(
 
     if not all_ok:
         raise typer.Exit(code=1)
+
+
+@lists_app.command("list")
+def lists_list() -> None:
+    """List all staple lists."""
+    names = list_names()
+    active = get_active_list()
+    for name in names:
+        marker = "*" if name == active else " "
+        console.print(f"{marker} {name}")
+
+
+@lists_app.command("create")
+def lists_create(name: str = typer.Argument(..., help="List name")) -> None:
+    """Create a new list."""
+    try:
+        create_list(name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Created list:[/green] {name}")
+
+
+@lists_app.command("set-active")
+def lists_set_active(name: str = typer.Argument(..., help="List name")) -> None:
+    """Set the active list."""
+    try:
+        set_active_list(name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Active list:[/green] {name}")
+
+
+@lists_app.command("rename")
+def lists_rename(
+    old_name: str = typer.Argument(..., help="Old list name"),
+    new_name: str = typer.Argument(..., help="New list name"),
+) -> None:
+    """Rename a list."""
+    try:
+        rename_list(old_name, new_name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Renamed list:[/green] {old_name} -> {new_name}")
+
+
+@lists_app.command("delete")
+def lists_delete(name: str = typer.Argument(..., help="List name")) -> None:
+    """Delete a list."""
+    try:
+        delete_list(name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Deleted list:[/green] {name}")
 
 
 @proposal_app.command("apply")

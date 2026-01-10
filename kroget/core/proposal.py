@@ -49,6 +49,7 @@ def generate_proposal(
     config: KrogerConfig,
     staples: list[Staple],
     location_id: str,
+    list_name: str | None = None,
     auto_pin: bool = False,
     confirm_pin: Callable[[Staple, str], bool] | None = None,
 ) -> tuple[Proposal, dict[str, bool]]:
@@ -139,7 +140,11 @@ def generate_proposal(
                 should_pin = auto_pin or (confirm_pin(staple, chosen_upc) if confirm_pin else False)
                 if should_pin:
                     try:
-                        update_staple(staple.name, preferred_upc=chosen_upc)
+                        update_staple(
+                            staple.name,
+                            preferred_upc=chosen_upc,
+                            list_name=list_name,
+                        )
                         pinned[staple.name] = True
                         source = "preferred"
                     except ValueError:

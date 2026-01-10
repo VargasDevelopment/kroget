@@ -146,30 +146,235 @@ class StaplesStore:
         os.replace(tmp_path, self.path)
 
 
+def _default_lists_path() -> Path:
+    return Path.home() / ".kroget" / "lists.json"
+
+
+def _default_staples_path() -> Path:
+    return Path.home() / ".kroget" / "staples.json"
+
+
+def _validate_list_name(name: str) -> str:
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("List name must not be empty")
+    if len(cleaned) > 60:
+        raise ValueError("List name is too long")
+    return cleaned
+
+
+def _ensure_lists_data(lists_path: Path, staples_path: Path) -> None:
+    if lists_path.exists():
+        return
+    if staples_path.exists():
+        staples = StaplesStore(staples_path).load()
+        payload = {"active": "Staples", "lists": {"Staples": [s.to_dict() for s in staples]}}
+        lists_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = lists_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, lists_path)
+        return
+    payload = {"active": "Staples", "lists": {"Staples": []}}
+    lists_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = lists_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, lists_path)
+
+
+def _load_lists_data(
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> tuple[str, dict[str, list[Staple]]]:
+    lists_path = lists_path or _default_lists_path()
+    staples_path = staples_path or _default_staples_path()
+    _ensure_lists_data(lists_path, staples_path)
+    data = json.loads(lists_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Invalid lists.json format")
+    active = str(data.get("active", "Staples"))
+    raw_lists = data.get("lists", {})
+    if not isinstance(raw_lists, dict):
+        raw_lists = {}
+    lists: dict[str, list[Staple]] = {}
+    for name, entries in raw_lists.items():
+        if isinstance(entries, list):
+            lists[str(name)] = [
+                Staple.from_dict(entry) for entry in entries if isinstance(entry, dict)
+            ]
+    if not lists:
+        lists["Staples"] = []
+        active = "Staples"
+    if active not in lists:
+        active = next(iter(lists.keys()))
+    return active, lists
+
+
+def _save_lists_data(
+    active: str,
+    lists: dict[str, list[Staple]],
+    lists_path: Path | None = None,
+) -> None:
+    lists_path = lists_path or _default_lists_path()
+    payload = {
+        "active": active,
+        "lists": {name: [staple.to_dict() for staple in staples] for name, staples in lists.items()},
+    }
+    lists_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = lists_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, lists_path)
+
+
+def list_names(
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> list[str]:
+    _, lists = _load_lists_data(lists_path, staples_path)
+    return list(lists.keys())
+
+
+def get_active_list(
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> str:
+    active, _ = _load_lists_data(lists_path, staples_path)
+    return active
+
+
+def set_active_list(
+    name: str,
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    name = _validate_list_name(name)
+    if name not in lists:
+        raise ValueError(f"List '{name}' not found")
+    _save_lists_data(name, lists, lists_path)
+
+
+def create_list(
+    name: str,
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    name = _validate_list_name(name)
+    if name in lists:
+        raise ValueError(f"List '{name}' already exists")
+    lists[name] = []
+    _save_lists_data(active, lists, lists_path)
+
+
+def rename_list(
+    old_name: str,
+    new_name: str,
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    old_name = _validate_list_name(old_name)
+    new_name = _validate_list_name(new_name)
+    if old_name not in lists:
+        raise ValueError(f"List '{old_name}' not found")
+    if new_name in lists:
+        raise ValueError(f"List '{new_name}' already exists")
+    lists[new_name] = lists.pop(old_name)
+    if active == old_name:
+        active = new_name
+    _save_lists_data(active, lists, lists_path)
+
+
+def delete_list(
+    name: str,
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    name = _validate_list_name(name)
+    if name not in lists:
+        raise ValueError(f"List '{name}' not found")
+    if len(lists) <= 1:
+        raise ValueError("Cannot delete the last remaining list")
+    lists.pop(name)
+    if active == name:
+        active = next(iter(lists.keys()))
+    _save_lists_data(active, lists, lists_path)
+
+
+def get_staples(
+    list_name: str | None = None,
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> list[Staple]:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    name = list_name or active
+    if name not in lists:
+        raise ValueError(f"List '{name}' not found")
+    return list(lists[name])
+
+
 def load_staples(path: Path | None = None) -> list[Staple]:
-    return StaplesStore(path).load()
+    return get_staples(lists_path=path)
 
 
-def save_staples(staples: list[Staple], path: Path | None = None) -> None:
-    StaplesStore(path).save(staples)
+def save_staples(
+    staples: list[Staple],
+    *,
+    list_name: str | None = None,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    name = list_name or active
+    lists[name] = staples
+    _save_lists_data(active, lists, lists_path)
 
 
-def add_staple(staple: Staple, path: Path | None = None) -> None:
-    store = StaplesStore(path)
-    staples = store.load()
-    if any(existing.name == staple.name for existing in staples):
+def add_staple(
+    staple: Staple,
+    *,
+    list_name: str | None = None,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    name = list_name or active
+    if name not in lists:
+        raise ValueError(f"List '{name}' not found")
+    if any(existing.name == staple.name for existing in lists[name]):
         raise ValueError(f"Staple '{staple.name}' already exists")
-    staples.append(staple)
-    store.save(staples)
+    lists[name].append(staple)
+    _save_lists_data(active, lists, lists_path)
 
 
-def remove_staple(name: str, path: Path | None = None) -> None:
-    store = StaplesStore(path)
-    staples = store.load()
+def remove_staple(
+    name: str,
+    *,
+    list_name: str | None = None,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    list_name = list_name or active
+    if list_name not in lists:
+        raise ValueError(f"List '{list_name}' not found")
+    staples = lists[list_name]
     filtered = [staple for staple in staples if staple.name != name]
     if len(filtered) == len(staples):
         raise ValueError(f"Staple '{name}' not found")
-    store.save(filtered)
+    lists[list_name] = filtered
+    _save_lists_data(active, lists, lists_path)
 
 
 def update_staple(
@@ -179,10 +384,15 @@ def update_staple(
     quantity: int | None = None,
     preferred_upc: str | None = None,
     modality: str | None = None,
-    path: Path | None = None,
+    list_name: str | None = None,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
 ) -> None:
-    store = StaplesStore(path)
-    staples = store.load()
+    active, lists = _load_lists_data(lists_path, staples_path)
+    list_name = list_name or active
+    if list_name not in lists:
+        raise ValueError(f"List '{list_name}' not found")
+    staples = lists[list_name]
     updated = False
     for staple in staples:
         if staple.name == name:
@@ -198,4 +408,5 @@ def update_staple(
             break
     if not updated:
         raise ValueError(f"Staple '{name}' not found")
-    store.save(staples)
+    lists[list_name] = staples
+    _save_lists_data(active, lists, lists_path)
