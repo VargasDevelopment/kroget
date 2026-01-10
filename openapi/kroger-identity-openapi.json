@@ -1,0 +1,675 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Identity API",
+    "description": "The Identity API provides access to the profile information of an authenticated\nKroger customer. <br><br>The Identity API supports the following operations: <br>\n<table>\n<tr>\n  <th>Name</th>\n  <th>Method</th>\n  <th>Description</th>\n</tr>\n<tr>\n  <td>Profile information</td>\n  <td>GET</td>\n  <td>Returns a customer's full profile.</td>\n</tr>\n<tr>\n  <td>Profile query</td>\n  <td>GET</td>\n  <td>Determines if a customer's profile exist by email address.</td>\n</tr>\n<tr>\n  <td>Profile query</td>\n  <td>HEAD</td>\n  <td>Determines if a customer's profile exist by email address.</td>\n</tr>\n<tr>\n  <td>Profile loyalty information</td>\n  <td>GET</td>\n  <td>Returns a customer's loyalty card number.</td>\n</tr>\n</table>\n",
+    "termsOfService": "https://developer.kroger.com/terms",
+    "contact": {
+      "name": "API Support",
+      "email": "APISupport@kroger.com",
+      "url": "https://developer.kroger.com"
+    },
+    "version": "1.2.2"
+  },
+  "servers": [
+    {
+      "url": "https://api.kroger.com",
+      "description": "Production Environment"
+    },
+    {
+      "url": "https://api-ce.kroger.com",
+      "description": "Certification Environment"
+    }
+  ],
+  "security": [
+    {
+      "CustomerContext": [
+        "profile.name",
+        "profile.basic",
+        "profile.loyalty",
+        "profile.full"
+      ]
+    },
+    {
+      "ClientContext": [
+        "profile.exists"
+      ]
+    }
+  ],
+  "paths": {
+    "/v1/identity/profile": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Profile information",
+        "description": "Provides access to an authenticated customer's profile information. \n<br><br> **Note**: the customer must be authenticated using the OAuth2 Authorization \nCode grant type.\n",
+        "operationId": "profileGet",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/identity.profileModel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.identity.serverError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CustomerContext": [
+              "profile.name",
+              "profile.basic",
+              "profile.full",
+              "profile.loyalty"
+            ]
+          }
+        ],
+        "x-code-samples": [
+          {
+            "lang": "Shell",
+            "source": "curl -X GET \\\n  'https://api.kroger.com/v1/identity/profile' \\\n  -H 'Accept: application/json' \\\n  -H 'Authorization: Bearer {{TOKEN}}'\n"
+          },
+          {
+            "lang": "Go",
+            "source": "package main\n\nimport (\n  \"fmt\"\n  \"net/http\"\n  \"io/ioutil\"\n)\n\nfunc main() {\n\n  url := \"https://api.kroger.com/v1/identity/profile\"\n\n  req, _ := http.NewRequest(\"GET\", url, nil)\n\n  req.Header.Add(\"Accept\", \"application/json\")\n  req.Header.Add(\"Authorization\", \"Bearer {{TOKEN}}\")\n\n  res, _ := http.DefaultClient.Do(req)\n\n  defer res.Body.Close()\n  body, _ := ioutil.ReadAll(res.Body)\n\n  fmt.Println(res)\n  fmt.Println(string(body))\n\n}\n"
+          },
+          {
+            "lang": "JavaScript",
+            "source": "var settings = {\n  \"async\": true,\n  \"crossDomain\": true,\n  \"url\": \"https://api.kroger.com/v1/identity/profile\",\n  \"method\": \"GET\",\n  \"headers\": {\n    \"Accept\": \"application/json\",\n    \"Authorization\": \"Bearer {{TOKEN}}\"\n  }\n}\n\n$.ajax(settings).done(function (response) {\n  console.log(response);\n});\n"
+          },
+          {
+            "lang": "Java",
+            "source": "OkHttpClient client = new OkHttpClient();\n\nRequest request = new Request.Builder()\n  .url(\"https://api.kroger.com/v1/identity/profile\")\n  .get()\n  .addHeader(\"Accept\", \"application/json\")\n  .addHeader(\"Authorization\", \"Bearer {{TOKEN}}\")\n  .build();\n\nResponse response = client.newCall(request).execute();\n"
+          }
+        ]
+      },
+      "head": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Profile query",
+        "description": "Determine if a customer's profile exists by using their email address.",
+        "operationId": "ProfileExists",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "description": "The customer's email address.",
+            "example": "noreply@kroger.com",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/APIError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Invalid_email"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.identity.serverError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ClientContext": [
+              "profile.exists"
+            ]
+          }
+        ],
+        "x-code-samples": [
+          {
+            "lang": "Shell",
+            "source": "curl -X HEAD \\\n  'https://api.kroger.com/v1/identity/profile?{{EMAIL}}' \\\n  -H 'Accept: application/json' \\\n  -H 'Authorization: Bearer {{TOKEN}}'\n"
+          },
+          {
+            "lang": "Go",
+            "source": "package main\n\nimport (\n  \"fmt\"\n  \"net/http\"\n  \"io/ioutil\"\n)\n\nfunc main() {\n\n  url := \"https://api.kroger.com/v1/identity/profile?email={{EMAIL}}\"\n\n  req, _ := http.NewRequest(\"HEAD\", url, nil)\n\n  req.Header.Add(\"Accept\", \"application/json\")\n  req.Header.Add(\"Authorization\", \"Bearer {{TOKEN}}\")\n\n  res, _ := http.DefaultClient.Do(req)\n\n  defer res.Body.Close()\n  body, _ := ioutil.ReadAll(res.Body)\n\n  fmt.Println(res)\n  fmt.Println(string(body))\n\n}\n"
+          },
+          {
+            "lang": "JavaScript",
+            "source": "var settings = {\n  \"async\": true,\n  \"crossDomain\": true,\n  \"url\": \"https://api.kroger.com/v1/identity/profile?email={{EMAIL}}\",\n  \"method\": \"HEAD\",\n  \"headers\": {\n    \"Accept\": \"application/json\",\n    \"Authorization\": \"Bearer {{TOKEN}}\"\n  }\n}\n\n$.ajax(settings).done(function (response) {\n  console.log(response);\n});\n"
+          },
+          {
+            "lang": "Java",
+            "source": "OkHttpClient client = new OkHttpClient();\n\nRequest request = new Request.Builder()\n  .url(\"https://api.kroger.com/v1/identity/profile?email={{EMAIL}}\")\n  .head()\n  .addHeader(\"Accept\", \"application/json\")\n  .addHeader(\"Authorization\", \"Bearer {{TOKEN}}\")\n  .build();\n\nResponse response = client.newCall(request).execute();\n"
+          }
+        ]
+      }
+    },
+    "/v1/identity/profile/loyalty": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Profile loyalty information",
+        "description": "Provides access to an authenticated customer's loyalty information. \n<br><br> **Note**: the customer must be authenticated using the OAuth2 Authorization \nCode grant type.\n",
+        "operationId": "profileLoyaltyGet",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/identity.profileLoyaltyResponseModel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.identity.serverError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CustomerContext": [
+              "profile.loyalty"
+            ]
+          }
+        ],
+        "x-code-samples": [
+          {
+            "lang": "Shell",
+            "source": "curl -X GET \\\n  'https://api.kroger.com/v1/identity/profile/loyalty' \\\n  -H 'Accept: application/json' \\\n  -H 'Authorization: Bearer {{TOKEN}}'\n"
+          },
+          {
+            "lang": "Go",
+            "source": "package main\n\nimport (\n  \"fmt\"\n  \"net/http\"\n  \"io/ioutil\"\n)\n\nfunc main() {\n\n  url := \"https://api.kroger.com/v1/identity/profile/loyalty\"\n\n  req, _ := http.NewRequest(\"GET\", url, nil)\n\n  req.Header.Add(\"Accept\", \"application/json\")\n  req.Header.Add(\"Authorization\", \"Bearer {{TOKEN}}\")\n\n  res, _ := http.DefaultClient.Do(req)\n\n  defer res.Body.Close()\n  body, _ := ioutil.ReadAll(res.Body)\n\n  fmt.Println(res)\n  fmt.Println(string(body))\n\n}\n"
+          },
+          {
+            "lang": "JavaScript",
+            "source": "var settings = {\n  \"async\": true,\n  \"crossDomain\": true,\n  \"url\": \"https://api.kroger.com/v1/identity/profile/loyalty\",\n  \"method\": \"GET\",\n  \"headers\": {\n    \"Accept\": \"application/json\",\n    \"Authorization\": \"Bearer {{TOKEN}}\"\n  }\n}\n\n$.ajax(settings).done(function (response) {\n  console.log(response);\n});\n"
+          },
+          {
+            "lang": "Java",
+            "source": "OkHttpClient client = new OkHttpClient();\n\nRequest request = new Request.Builder()\n  .url(\"https://api.kroger.com/v1/identity/profile/loyalty\")\n  .get()\n  .addHeader(\"Accept\", \"application/json\")\n  .addHeader(\"Authorization\", \"Bearer {{TOKEN}}\")\n  .build();\n\nResponse response = client.newCall(request).execute();\n"
+          }
+        ]
+      }
+    },
+    "/v1/identity/profile/invoke/exists": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Profile query",
+        "description": "Determine if a customer's profile exists by using their \nemail address.\n",
+        "operationId": "ProfileInvokeExists",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "description": "The customer's email address.",
+            "example": "noreply@kroger.com",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/APIError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Invalid_email"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError.identity.serverError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ClientContext": [
+              "profile.exists"
+            ]
+          }
+        ],
+        "x-code-samples": [
+          {
+            "lang": "Shell",
+            "source": "curl -X GET \\\\\\n  'https://api.kroger.com/v1/identity/profile/invoke/exists?email={{EMAIL}}'\n\\\\\\n  -H 'Accept: application/json' \\\\\\n  -H 'Authorization: Bearer {{TOKEN}}'\n\\n\n"
+          },
+          {
+            "lang": "Go",
+            "source": "package main\n\nimport (\n  \"fmt\"\n  \"net/http\"\n  \"io/ioutil\"\n)\n\nfunc main() {\n\n  url := \"https://api.kroger.com/v1/identity/profile/invoke/exists?email={{EMAIL}}\"\n\n  req, _ := http.NewRequest(\"GET\", url, nil)\n\n  req.Header.Add(\"Accept\", \"application/json\")\n  req.Header.Add(\"Authorization\", \"Bearer {{TOKEN}}\")\n\n  res, _ := http.DefaultClient.Do(req)\n\n  defer res.Body.Close()\n  body, _ := ioutil.ReadAll(res.Body)\n\n  fmt.Println(res)\n  fmt.Println(string(body))\n\n}\n"
+          },
+          {
+            "lang": "JavaScript",
+            "source": "var settings = {\n  \"async\": true,\n  \"crossDomain\": true,\n  \"url\": \"https://api.kroger.com/v1/identity/profile/invoke/exists?email={{EMAIL}}\",\n  \"method\": \"GET\",\n  \"headers\": {\n    \"Accept\": \"application/json\",\n    \"Authorization\": \"Bearer {{TOKEN}}\"\n  }\n}\n\n$.ajax(settings).done(function (response) {\n  console.log(response);\n});\n"
+          },
+          {
+            "lang": "Java",
+            "source": "OkHttpClient client = new OkHttpClient();\n\nRequest request = new Request.Builder()\n  .url(\"https://api.kroger.com/v1/identity/profile/invoke/exists?email={{EMAIL}}\")\n  .get()\n  .addHeader(\"Accept\", \"application/json\")\n  .addHeader(\"Authorization\", \"Bearer {{TOKEN}}\")\n  .build();\n\nResponse response = client.newCall(request).execute();\n"
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Invalid_email": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "number",
+            "example": 1569851999383
+          },
+          "code": {
+            "type": "string",
+            "example": "API-4101-400"
+          },
+          "reason": {
+            "type": "string",
+            "example": "Missing parameter 'email' on request"
+          }
+        }
+      },
+      "APIError": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "number"
+          },
+          "code": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "APIError.forbidden": {
+        "type": "object",
+        "properties": {
+          "errors": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string",
+                "example": "missing required scopes"
+              },
+              "code": {
+                "type": "string",
+                "example": "Forbidden"
+              },
+              "timestamp": {
+                "type": "number",
+                "example": 1564143270221
+              }
+            }
+          }
+        }
+      },
+      "APIError.identity.serverError": {
+        "type": "object",
+        "properties": {
+          "errors": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string",
+                "example": "Internal server error"
+              },
+              "code": {
+                "type": "string",
+                "example": "IDENTITY-4xxx-xxx"
+              },
+              "timestamp": {
+                "type": "number",
+                "example": 1564159296910
+              }
+            }
+          }
+        }
+      },
+      "APIError.unauthorized": {
+        "type": "object",
+        "properties": {
+          "errors": {
+            "type": "object",
+            "properties": {
+              "error_description": {
+                "type": "string",
+                "example": "The access token is invalid or has expired"
+              },
+              "error": {
+                "type": "string",
+                "example": "invalid_token"
+              }
+            }
+          }
+        }
+      },
+      "identity.profileModel": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "firstName": {
+                "type": "string",
+                "description": "The customer's first name.",
+                "example": "John"
+              },
+              "lastName": {
+                "type": "string",
+                "description": "The customer's last name.",
+                "example": "Doe"
+              },
+              "addresses": {
+                "type": "array",
+                "description": "The customer's address.",
+                "items": {
+                  "$ref": "#/components/schemas/identity.profileAddressModel"
+                }
+              },
+              "loyalty": {
+                "$ref": "#/components/schemas/identity.profileLoyaltyModel"
+              },
+              "id": {
+                "type": "string",
+                "description": "The customer's profile Id.",
+                "example": "53990804-cfd1-43f3-8256-bdc9817a4fd0"
+              },
+              "email": {
+                "type": "string",
+                "description": "The customer's email address.",
+                "example": "noreply@kroger.com"
+              },
+              "phoneNumbers": {
+                "type": "array",
+                "description": "An array of the customer's phone numbers.",
+                "items": {
+                  "$ref": "#/components/schemas/identity.profilePhoneNumberModel"
+                }
+              }
+            }
+          },
+          "meta": {
+            "type": "object",
+            "properties": {}
+          }
+        }
+      },
+      "identity.profilePhoneNumberModel": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "The type of the phone number.",
+            "example": "home"
+          },
+          "value": {
+            "type": "string",
+            "description": "The customer's phone number.",
+            "example": "555-555-5555"
+          }
+        }
+      },
+      "identity.profileAddressModel": {
+        "type": "object",
+        "properties": {
+          "addressLine1": {
+            "type": "string",
+            "description": "The customer's address.",
+            "example": "1014 Vine St."
+          },
+          "addressLine2": {
+            "type": "string",
+            "description": "An optional secondary address.",
+            "example": ""
+          },
+          "city": {
+            "type": "string",
+            "description": "The city of the address.",
+            "example": "Cincinnati"
+          },
+          "stateCode": {
+            "type": "string",
+            "description": "The two-letter code of the state.",
+            "example": "OH"
+          },
+          "postalCode": {
+            "type": "string",
+            "description": "The postal code of the address.",
+            "example": "45202"
+          },
+          "countryCode": {
+            "type": "string",
+            "description": "The country code of the address.",
+            "example": "US"
+          },
+          "addressType": {
+            "type": "string",
+            "description": "The type of address.",
+            "example": "home"
+          }
+        }
+      },
+      "identity.profileLoyaltyResponseModel": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "loyalty": {
+                "$ref": "#/components/schemas/identity.profileLoyaltyModel"
+              }
+            }
+          },
+          "meta": {
+            "type": "object",
+            "properties": {}
+          }
+        }
+      },
+      "identity.profileLoyaltyModel": {
+        "type": "object",
+        "description": "The customer's loyalty information.",
+        "properties": {
+          "cardNumber": {
+            "type": "string",
+            "description": "The customer's loyalty card number.",
+            "example": "0123456789"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "CustomerContext": {
+        "type": "oauth2",
+        "description": "To make an API request that returns either personalized customer data or acts on behalf of a customer, the customer's consent is required using the [Authorization Code Grant Type](https://developer.kroger.com/reference/api/authorization-endpoints-partner#tag/OAuth2/operation/authorizationCode).\n",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://api.kroger.com/v1/connect/oauth2/authorize",
+            "tokenUrl": "https://api.kroger.com/v1/connect/oauth2/token",
+            "scopes": {
+              "profile.name": "Grants read access to profile information. This scope returns only the ID, first name, and last name associated with the profile.",
+              "profile.basic": "Grants read access to profile information. This scope returns only the email, name, address, and phone number associated with the profile.",
+              "profile.loyalty": "Grants read access to profile loyalty information. This scope includes only the loyalty card number.",
+              "profile.full": "Grants read access to profile information only. This scope includes profile.basic and profile.loyalty."
+            }
+          }
+        }
+      },
+      "ClientContext": {
+        "type": "oauth2",
+        "description": "To make an API request that interacts with generalized information and does not require customer consent, use the [Client Credentials Grant Type](https://developer.kroger.com/reference/api/authorization-endpoints-partner#tag/OAuth2/operation/accessToken) to authenticate your OAuth2 application.\n",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://api.kroger.com/v1/connect/oauth2/token",
+            "scopes": {
+              "profile.exists": "Grants read access to verify if a profile exists."
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-tagGroups": [
+    {
+      "name": "API Reference",
+      "tags": [
+        "Identity"
+      ]
+    }
+  ]
+}
