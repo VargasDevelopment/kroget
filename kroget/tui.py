@@ -2,42 +2,216 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from rich.text import Text
-from textual.widgets import Button, DataTable, Footer, Header, Static
+from textual.widgets import Button, DataTable, Footer, Header, Input, LoadingIndicator, Static
 
-from kroget.core.proposal import Proposal, apply_proposal_items, generate_proposal
-from kroget.core.storage import ConfigStore, KrogerConfig, Staple, TokenStore, load_staples, update_staple
+from kroget.core.product_display import product_display_fields
+from kroget.core.staple_name import normalize_staple_name
+from kroget.core.product_upc import extract_upcs
+from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
+from kroget.core.storage import (
+    ConfigStore,
+    KrogerConfig,
+    Staple,
+    TokenStore,
+    add_staple,
+    load_staples,
+    update_staple,
+)
 from kroget.kroger import auth
+from kroget.kroger.client import KrogerAPIError, KrogerClient
 
 
 @dataclass
 class SelectionState:
     proposal_index: int | None = None
     alternative_index: int | None = None
+    search_index: int | None = None
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, yes_label: str = "Apply", no_label: str = "Cancel") -> None:
         super().__init__()
         self.message = message
+        self.yes_label = yes_label
+        self.no_label = no_label
 
     def compose(self) -> ComposeResult:
         yield Static(self.message, id="confirm_message")
         with Horizontal(id="confirm_buttons"):
-            yield Button("Apply", id="confirm_yes", variant="success")
-            yield Button("Cancel", id="confirm_no", variant="error")
+            yield Button(self.yes_label, id="confirm_yes", variant="success")
+            yield Button(self.no_label, id="confirm_no", variant="error")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "confirm_yes")
+
+
+class QuantityScreen(ModalScreen[int | None]):
+    def __init__(self, default: int, title: str) -> None:
+        super().__init__()
+        self.default = default
+        self.title = title
+        self._ready = False
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.title, id="confirm_message")
+        yield Input(value=str(self.default), id="quantity_input")
+        with Horizontal(id="confirm_buttons"):
+            yield Button("Continue", id="confirm_yes", variant="success")
+            yield Button("Cancel", id="confirm_no", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#quantity_input", Input).focus()
+        self.set_timer(0.05, self._enable_submit)
+
+    def _enable_submit(self) -> None:
+        self._ready = True
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm_no":
+            self.dismiss(None)
+            return
+        value = self.query_one("#quantity_input", Input).value.strip()
+        try:
+            quantity = int(value)
+        except ValueError:
+            self.dismiss(None)
+            return
+        self.dismiss(quantity if quantity > 0 else None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "quantity_input":
+            return
+        if not self._ready:
+            return
+        value = event.value.strip()
+        try:
+            quantity = int(value)
+        except ValueError:
+            self.dismiss(None)
+            return
+        self.dismiss(quantity if quantity > 0 else None)
+
+
+class StapleScreen(ModalScreen[tuple[str, int] | None]):
+    def __init__(
+        self,
+        default_name: str,
+        default_term: str,
+        default_quantity: int,
+        default_modality: str,
+    ) -> None:
+        super().__init__()
+        self.default_name = default_name
+        self.default_term = default_term
+        self.default_quantity = default_quantity
+        self.modality = default_modality
+        self._ready = False
+
+    def compose(self) -> ComposeResult:
+        yield Static("Save as staple", id="confirm_message")
+        yield Input(value=self.default_name, id="staple_name")
+        yield Input(value=self.default_term, id="staple_term")
+        yield Input(value=str(self.default_quantity), id="staple_quantity")
+        yield Button(f"Modality: {self.modality}", id="staple_modality", variant="primary")
+        with Horizontal(id="confirm_buttons"):
+            yield Button("Save", id="confirm_yes", variant="success")
+            yield Button("Cancel", id="confirm_no", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#staple_name", Input).focus()
+        self.set_timer(0.05, self._enable_submit)
+
+    def _enable_submit(self) -> None:
+        self._ready = True
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "staple_modality":
+            self.modality = "DELIVERY" if self.modality == "PICKUP" else "PICKUP"
+            event.button.label = f"Modality: {self.modality}"
+            return
+        if event.button.id == "confirm_no":
+            self.dismiss(None)
+            return
+        name = self.query_one("#staple_name", Input).value.strip()
+        term = self.query_one("#staple_term", Input).value.strip()
+        qty_value = self.query_one("#staple_quantity", Input).value.strip()
+        if not name:
+            self.dismiss(None)
+            return
+        try:
+            quantity = int(qty_value)
+        except ValueError:
+            self.dismiss(None)
+            return
+        self.dismiss((name, term or name, quantity if quantity > 0 else 1, self.modality))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id not in {"staple_name", "staple_term", "staple_quantity"}:
+            return
+        if not self._ready:
+            return
+        name = self.query_one("#staple_name", Input).value.strip()
+        term = self.query_one("#staple_term", Input).value.strip()
+        qty_value = self.query_one("#staple_quantity", Input).value.strip()
+        if not name:
+            self.dismiss(None)
+            return
+        try:
+            quantity = int(qty_value)
+        except ValueError:
+            self.dismiss(None)
+            return
+        self.dismiss((name, term or name, quantity if quantity > 0 else 1, self.modality))
+
+
+class UPCSelectScreen(ModalScreen[str | None]):
+    def __init__(self, upcs: list[str]) -> None:
+        super().__init__()
+        self.upcs = upcs
+        self.selection = 0
+
+    def compose(self) -> ComposeResult:
+        yield Static("Select a UPC", id="confirm_message")
+        table = DataTable(id="upc_table")
+        table.add_columns("UPC")
+        for index, upc in enumerate(self.upcs):
+            table.add_row(upc, key=str(index))
+        yield table
+        with Horizontal(id="confirm_buttons"):
+            yield Button("Use UPC", id="confirm_yes", variant="success")
+            yield Button("Cancel", id="confirm_no", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#upc_table", DataTable).focus()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table.id == "upc_table":
+            self.selection = event.cursor_row
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm_no":
+            self.dismiss(None)
+            return
+        if 0 <= self.selection < len(self.upcs):
+            self.dismiss(self.upcs[self.selection])
+        else:
+            self.dismiss(None)
 
 
 class KrogetApp(App):
     CSS = """
     #main {
         height: 1fr;
+    }
+
+    #nav {
+        height: 3;
+        padding: 0 1;
+        content-align: left middle;
     }
 
     #status {
@@ -54,6 +228,34 @@ class KrogetApp(App):
         border: solid $panel;
         padding: 1;
         width: 1fr;
+    }
+
+    #planner_view {
+        height: 1fr;
+    }
+
+    #search_view {
+        height: 1fr;
+        display: none;
+        border: solid $panel;
+        padding: 1;
+    }
+
+    .search-active #planner_view {
+        display: none;
+    }
+
+    .search-active #search_view {
+        display: block;
+    }
+
+    #search_controls {
+        height: 3;
+    }
+
+    #search_loading {
+        display: none;
+        height: 1;
     }
 
     DataTable {
@@ -78,6 +280,8 @@ class KrogetApp(App):
         ("p", "pin", "Pin UPC"),
         ("d", "delete", "Remove"),
         ("a", "apply", "Apply"),
+        ("s", "save_staple", "Save staple"),
+        ("/", "focus_search", "Search"),
         ("q", "quit", "Quit"),
     ]
 
@@ -90,21 +294,34 @@ class KrogetApp(App):
         self.staples: list[Staple] = []
         self.proposal: Proposal | None = None
         self.pinned: dict[str, bool] = {}
+        self.search_results: list = []
+        self.search_term = ""
+        self.active_view = "planner"
         self.selection = SelectionState()
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("Mode: Dry-run", id="status")
-        with Horizontal(id="main"):
-            with Vertical(id="left"):
-                yield Static("Staples")
-                yield DataTable(id="staples")
-            with Vertical(id="center"):
-                yield Static("Proposal")
-                yield DataTable(id="proposal")
-            with Vertical(id="right"):
-                yield Static("Alternatives")
-                yield DataTable(id="alternatives")
+        with Horizontal(id="nav"):
+            yield Button("Planner", id="nav_planner")
+            yield Button("Search", id="nav_search")
+        with Vertical(id="planner_view"):
+            with Horizontal(id="main"):
+                with Vertical(id="left"):
+                    yield Static("Staples")
+                    yield DataTable(id="staples")
+                with Vertical(id="center"):
+                    yield Static("Proposal")
+                    yield DataTable(id="proposal")
+                with Vertical(id="right"):
+                    yield Static("Alternatives")
+                    yield DataTable(id="alternatives")
+        with Vertical(id="search_view"):
+            yield Static("Search")
+            with Horizontal(id="search_controls"):
+                yield Input(placeholder="Search Kroger products...", id="search_input")
+            yield LoadingIndicator(id="search_loading")
+            yield DataTable(id="search_results")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -123,6 +340,10 @@ class KrogetApp(App):
         alt_table = self.query_one("#alternatives", DataTable)
         alt_table.add_columns("UPC", "Description")
         alt_table.cursor_type = "row"
+
+        results_table = self.query_one("#search_results", DataTable)
+        results_table.add_columns("Description", "Size", "Price", "UPC")
+        results_table.cursor_type = "row"
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
         status = self.query_one("#status", Static)
@@ -201,16 +422,31 @@ class KrogetApp(App):
                 key=str(index),
             )
 
+    def _populate_search_results(self) -> None:
+        table = self.query_one("#search_results", DataTable)
+        table.clear()
+        for index, product in enumerate(self.search_results):
+            fields = product_display_fields(product)
+            table.add_row(
+                fields["description"],
+                fields["size"],
+                fields["price"],
+                fields["upc"],
+                key=str(index),
+            )
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "proposal":
-            if event.row_key is None:
-                return
-            self.selection.proposal_index = int(str(event.row_key))
+            self.selection.proposal_index = event.cursor_row
             self._update_alternatives()
         elif event.data_table.id == "alternatives":
-            if event.row_key is None:
-                return
-            self.selection.alternative_index = int(str(event.row_key))
+            self.selection.alternative_index = event.cursor_row
+        elif event.data_table.id == "search_results":
+            self.selection.search_index = event.cursor_row
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table.id == "search_results":
+            self.selection.search_index = event.cursor_row
 
     def _update_alternatives(self) -> None:
         alt_table = self.query_one("#alternatives", DataTable)
@@ -226,9 +462,15 @@ class KrogetApp(App):
             )
 
     def action_refresh(self) -> None:
-        self.refresh_data()
+        if self.active_view == "planner":
+            self.refresh_data()
+        elif self.active_view == "search" and self.search_term:
+            self._start_search(self.search_term)
 
     def action_delete(self) -> None:
+        if self.active_view != "planner":
+            self._set_status("Switch to Planner to remove proposal items.", error=True)
+            return
         if not self.proposal or self.selection.proposal_index is None:
             self._set_status("Select a proposal item to remove.", error=True)
             return
@@ -239,42 +481,32 @@ class KrogetApp(App):
         self._set_status("Removed item from proposal.")
 
     def action_pin(self) -> None:
-        if not self.proposal or self.selection.proposal_index is None:
-            self._set_status("Select a proposal item.", error=True)
-            return
-        if self.selection.alternative_index is None:
-            self._set_status("Select an alternative UPC to pin.", error=True)
-            return
-
-        item = self.proposal.items[self.selection.proposal_index]
-        if self.selection.alternative_index >= len(item.alternatives):
-            self._set_status("Invalid alternative selection.", error=True)
-            return
-        chosen = item.alternatives[self.selection.alternative_index]
-
-        try:
-            update_staple(item.name, preferred_upc=chosen.upc)
-        except ValueError as exc:
-            self._set_status(str(exc), error=True)
-            return
-
-        item.upc = chosen.upc
-        item.source = "preferred"
-        self.pinned[item.name] = True
-        for staple in self.staples:
-            if staple.name == item.name:
-                staple.preferred_upc = chosen.upc
-                break
-
-        self._populate_tables()
-        self._update_alternatives()
-        self._set_status(f"Pinned UPC {chosen.upc} for {item.name}.")
+        if self.active_view == "search":
+            if not self.query_one("#search_results", DataTable).has_focus:
+                return
+            self._start_pin_search_result()
+        else:
+            self._pin_proposal_alternative()
 
     async def action_apply(self) -> None:
+        if self.active_view != "planner":
+            self._set_status("Switch to Planner to apply proposal.", error=True)
+            return
         if not self.proposal:
             self._set_status("No proposal to apply.", error=True)
             return
         self.push_screen(ConfirmScreen("Apply proposal to cart?"), self._handle_confirm)
+
+    def action_focus_search(self) -> None:
+        self._show_search_view()
+        self.query_one("#search_input", Input).focus()
+
+    def action_save_staple(self) -> None:
+        if self.active_view != "search":
+            return
+        if not self.query_one("#search_results", DataTable).has_focus:
+            return
+        self._save_search_as_staple()
 
     def _handle_confirm(self, confirmed: bool) -> None:
         if not confirmed:
@@ -306,6 +538,417 @@ class KrogetApp(App):
             self.call_from_thread(self._set_status, message, error=True)
         summary = f"Applied: {success} succeeded, {failed} failed"
         self.call_from_thread(self._set_status, summary, error=failed > 0)
+
+    def _pin_proposal_alternative(self) -> None:
+        if not self.proposal or self.selection.proposal_index is None:
+            self._set_status("Select a proposal item.", error=True)
+            return
+        if self.selection.alternative_index is None:
+            self._set_status("Select an alternative UPC to pin.", error=True)
+            return
+
+        item = self.proposal.items[self.selection.proposal_index]
+        if self.selection.alternative_index >= len(item.alternatives):
+            self._set_status("Invalid alternative selection.", error=True)
+            return
+        chosen = item.alternatives[self.selection.alternative_index]
+
+        try:
+            update_staple(item.name, preferred_upc=chosen.upc)
+        except ValueError as exc:
+            self._set_status(str(exc), error=True)
+            return
+
+        item.upc = chosen.upc
+        item.source = "preferred"
+        self.pinned[item.name] = True
+        for staple in self.staples:
+            if staple.name == item.name:
+                staple.preferred_upc = chosen.upc
+                break
+
+        self._populate_tables()
+        self._update_alternatives()
+        self._set_status(f"Pinned UPC {chosen.upc} for {item.name}.")
+
+    def _show_search_view(self) -> None:
+        if self.active_view == "search":
+            return
+        self.active_view = "search"
+        self.add_class("search-active")
+
+    def _show_planner_view(self) -> None:
+        if self.active_view == "planner":
+            return
+        self.active_view = "planner"
+        self.remove_class("search-active")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "nav_search":
+            self._show_search_view()
+            self.query_one("#search_input", Input).focus()
+        elif event.button.id == "nav_planner":
+            self._show_planner_view()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "search_input":
+            term = event.value.strip()
+            if not term:
+                self._set_status("Enter a search term.", error=True)
+                return
+            self._start_search(term)
+
+    def _set_search_loading(self, loading: bool) -> None:
+        indicator = self.query_one("#search_loading", LoadingIndicator)
+        indicator.styles.display = "block" if loading else "none"
+
+    def _start_search(self, term: str) -> None:
+        if not self.location_id:
+            self._set_status("Default location is not set.", error=True)
+            return
+        self.search_term = term
+        self._set_search_loading(True)
+        self._set_status(f"Searching '{term}'...")
+        self.run_worker(
+            lambda: self._search_worker(term),
+            group="search",
+            exclusive=True,
+            exit_on_error=False,
+            thread=True,
+        )
+
+    def _search_worker(self, term: str) -> None:
+        try:
+            token = auth.get_client_credentials_token(
+                base_url=self.config.base_url,
+                client_id=self.config.client_id,
+                client_secret=self.config.client_secret,
+                scopes=["product.compact"],
+            )
+            with KrogerClient(self.config.base_url) as client:
+                results = client.products_search(
+                    token.access_token,
+                    term=term,
+                    location_id=self.location_id or "",
+                    limit=25,
+                )
+            self.call_from_thread(self._handle_search_results, results.data, None)
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self._handle_search_results, [], str(exc))
+
+    def _handle_search_results(self, results, error: str | None) -> None:
+        self.search_results = results
+        self._set_search_loading(False)
+        if error:
+            self._set_status(f"Search failed: {error}", error=True)
+        else:
+            self._set_status(f"Found {len(results)} result(s).")
+        self._populate_search_results()
+        if results:
+            self.query_one("#search_results", DataTable).focus()
+
+    def _current_search_product(self):
+        if self.selection.search_index is None:
+            self._set_status("Select a search result.", error=True)
+            return None
+        if self.selection.search_index >= len(self.search_results):
+            self._set_status("Invalid search selection.", error=True)
+            return None
+        return self.search_results[self.selection.search_index]
+
+    def _resolve_upc_for_product(self, product) -> str | None:
+        fields = product_display_fields(product)
+        if fields["upc"]:
+            return fields["upc"]
+        try:
+            token = auth.get_client_credentials_token(
+                base_url=self.config.base_url,
+                client_id=self.config.client_id,
+                client_secret=self.config.client_secret,
+                scopes=["product.compact"],
+            )
+            with KrogerClient(self.config.base_url) as client:
+                payload = client.get_product(
+                    token.access_token,
+                    product_id=product.productId,
+                    location_id=self.location_id or "",
+                )
+            upcs = extract_upcs(payload)
+            return upcs[0] if upcs else None
+        except KrogerAPIError:
+            return None
+
+    def _start_add_to_cart_flow(self) -> None:
+        product = self._current_search_product()
+        if not product:
+            return
+        self.push_screen(
+            QuantityScreen(default=1, title="Add to cart quantity"),
+            lambda qty: self._handle_cart_quantity(qty, product),
+        )
+
+    def _handle_cart_quantity(self, quantity: int | None, product) -> None:
+        if not quantity:
+            self._set_status("Add to cart canceled.")
+            return
+        self.push_screen(
+            ConfirmScreen(f"Add {quantity} to cart?"),
+            lambda confirmed: self._confirm_add_to_cart(confirmed, product, quantity),
+        )
+
+    def _confirm_add_to_cart(self, confirmed: bool, product, quantity: int) -> None:
+        if not confirmed:
+            self._set_status("Add to cart canceled.")
+            return
+        self._set_status("Adding to cart...")
+        self.run_worker(
+            lambda: self._add_to_cart_worker(product, quantity),
+            group="cart-add",
+            exclusive=True,
+            exit_on_error=False,
+            thread=True,
+        )
+
+    def _add_to_cart_worker(self, product, quantity: int) -> None:
+        try:
+            token = auth.load_user_token(self.config)
+            upc = self._resolve_upc_for_product(product)
+            if not upc:
+                self.call_from_thread(self._set_status, "No UPC found for item.", error=True)
+                return
+            item = ProposalItem(
+                name=product.description or "item",
+                quantity=quantity,
+                modality="PICKUP",
+                upc=upc,
+            )
+            success, failed, errors = apply_proposal_items(
+                config=self.config,
+                token=token.access_token,
+                items=[item],
+                stop_on_error=False,
+            )
+            if errors:
+                self.call_from_thread(self._set_status, errors[0], error=True)
+            else:
+                self.call_from_thread(
+                    self._set_status,
+                    f"Added to cart ({success} ok, {failed} failed).",
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self._set_status, f"Add to cart failed: {exc}", error=True)
+
+    def _save_search_as_staple(self) -> None:
+        product = self._current_search_product()
+        if not product:
+            return
+        self._set_status("Resolving UPC...")
+        self.run_worker(
+            lambda: self._resolve_upcs_worker(product),
+            group="staple-upc",
+            exclusive=True,
+            exit_on_error=False,
+            thread=True,
+        )
+
+    def _resolve_upcs_worker(self, product) -> None:
+        fields = product_display_fields(product)
+        if fields["upc"]:
+            self.call_from_thread(self._handle_resolved_upcs, product, [fields["upc"]])
+            return
+        try:
+            token = auth.get_client_credentials_token(
+                base_url=self.config.base_url,
+                client_id=self.config.client_id,
+                client_secret=self.config.client_secret,
+                scopes=["product.compact"],
+            )
+            with KrogerClient(self.config.base_url) as client:
+                payload = client.get_product(
+                    token.access_token,
+                    product_id=product.productId,
+                    location_id=self.location_id or "",
+                )
+            upcs = extract_upcs(payload)
+            self.call_from_thread(self._handle_resolved_upcs, product, upcs)
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self._set_status, f"UPC lookup failed: {exc}", error=True)
+
+    def _handle_resolved_upcs(self, product, upcs: list[str]) -> None:
+        if not upcs:
+            self._set_status("No UPC found for item.", error=True)
+            return
+        if len(upcs) == 1:
+            self._prompt_staple_details(product, upcs[0])
+            return
+        self.push_screen(
+            UPCSelectScreen(upcs),
+            lambda selected: self._handle_upc_selection(product, selected),
+        )
+
+    def _handle_upc_selection(self, product, selected: str | None) -> None:
+        if not selected:
+            self._set_status("UPC selection canceled.")
+            return
+        self._prompt_staple_details(product, selected)
+
+    def _prompt_staple_details(self, product, upc: str) -> None:
+        default_name = normalize_staple_name(product.description or self.search_term or "staple")
+        default_term = self.search_term or product.description or default_name
+        self.push_screen(
+            StapleScreen(
+                default_name=default_name,
+                default_term=default_term,
+                default_quantity=1,
+                default_modality="PICKUP",
+            ),
+            lambda result: self._handle_save_staple(result, upc),
+        )
+
+    def _handle_save_staple(self, result, upc: str) -> None:
+        if result is None:
+            self._set_status("Save staple canceled.")
+            return
+        name, term, quantity, modality = result
+        exists = any(staple.name == name for staple in self.staples)
+        if exists:
+            self.push_screen(
+                ConfirmScreen(
+                    f"Staple '{name}' exists. Overwrite?",
+                    yes_label="Overwrite",
+                    no_label="Cancel",
+                ),
+                lambda confirmed: self._handle_overwrite_confirm(
+                    confirmed, name, term, quantity, modality, upc
+                ),
+            )
+            return
+        self._save_staple_record(name, term, quantity, modality, upc, overwrite=False)
+
+    def _handle_overwrite_confirm(
+        self,
+        confirmed: bool,
+        name: str,
+        term: str,
+        quantity: int,
+        modality: str,
+        upc: str,
+    ) -> None:
+        if not confirmed:
+            self._set_status("Save staple canceled.")
+            return
+        self._save_staple_record(name, term, quantity, modality, upc, overwrite=True)
+
+    def _save_staple_record(
+        self,
+        name: str,
+        term: str,
+        quantity: int,
+        modality: str,
+        upc: str,
+        overwrite: bool,
+    ) -> None:
+        self._set_status("Saving staple...")
+        self.run_worker(
+            lambda: self._save_staple_worker(name, term, quantity, modality, upc, overwrite),
+            group="staple-save",
+            exclusive=True,
+            exit_on_error=False,
+            thread=True,
+        )
+
+    def _save_staple_worker(
+        self,
+        name: str,
+        term: str,
+        quantity: int,
+        modality: str,
+        upc: str,
+        overwrite: bool,
+    ) -> None:
+        try:
+            if overwrite:
+                update_staple(
+                    name,
+                    term=term,
+                    quantity=quantity,
+                    preferred_upc=upc,
+                    modality=modality,
+                )
+            else:
+                add_staple(
+                    Staple(
+                        name=name,
+                        term=term,
+                        quantity=quantity,
+                        preferred_upc=upc,
+                        modality=modality,
+                    )
+                )
+            self.call_from_thread(self._set_status, f"Saved staple '{name}'.")
+            self.call_from_thread(self.refresh_data)
+            self.call_from_thread(
+                lambda: self.push_screen(
+                    ConfirmScreen(
+                        "Regenerate proposal now?",
+                        yes_label="Regenerate",
+                        no_label="Later",
+                    ),
+                    lambda confirmed: self._maybe_regenerate(confirmed),
+                )
+            )
+        except ValueError as exc:
+            self.call_from_thread(self._set_status, str(exc), error=True)
+
+    def _maybe_regenerate(self, confirmed: bool) -> None:
+        if confirmed:
+            self.refresh_data()
+
+    def _pin_search_result(self) -> None:
+        product = self._current_search_product()
+        if not product:
+            return
+        self._set_status("Pinning UPC...")
+        self.run_worker(
+            lambda: self._pin_search_worker(product),
+            group="pin",
+            exclusive=True,
+            exit_on_error=False,
+            thread=True,
+        )
+
+    def _pin_search_worker(self, product) -> None:
+        upc = self._resolve_upc_for_product(product)
+        if not upc:
+            self.call_from_thread(self._set_status, "No UPC found for item.", error=True)
+            return
+        match = None
+        term = (self.search_term or "").lower()
+        for staple in self.staples:
+            if staple.name.lower() == term or staple.term.lower() == term:
+                match = staple
+                break
+        if not match:
+            self.call_from_thread(self._set_status, "No matching staple to pin.", error=True)
+            return
+        try:
+            update_staple(match.name, preferred_upc=upc)
+        except ValueError as exc:
+            self.call_from_thread(self._set_status, str(exc), error=True)
+            return
+        self.call_from_thread(self._set_status, f"Pinned UPC {upc} to staple '{match.name}'.")
+        self.call_from_thread(self.refresh_data)
+
+    def on_key(self, event) -> None:
+        if self.screen.is_modal:
+            return
+        if self.active_view != "search":
+            return
+        if not self.query_one("#search_results", DataTable).has_focus:
+            return
+        if event.key in {"enter", "return"}:
+            self._start_add_to_cart_flow()
+            event.stop()
 
 
 def run_tui() -> None:
