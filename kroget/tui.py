@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -13,6 +14,7 @@ from kroget.core.recent_searches import RecentSearchEntry, load_recent_searches,
 from kroget.core.staple_name import normalize_staple_name
 from kroget.core.product_upc import extract_upcs
 from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
+from kroget.core.proposal_merge import merge_proposal_items
 from kroget.core.storage import (
     ConfigStore,
     KrogerConfig,
@@ -245,6 +247,7 @@ class ListManagerScreen(ModalScreen[None]):
         yield table
         with Horizontal(id="confirm_buttons"):
             yield Button("Set Active", id="list_set", variant="success")
+            yield Button("Add to Proposal", id="list_add", variant="primary")
             yield Button("Create", id="list_create", variant="primary")
             yield Button("Rename", id="list_rename", variant="primary")
             yield Button("Delete", id="list_delete", variant="error")
@@ -291,6 +294,12 @@ class ListManagerScreen(ModalScreen[None]):
             except ValueError as exc:
                 self.app_ref._set_status(str(exc), error=True)
             return
+        if event.button.id == "list_add":
+            name = self._selected_name()
+            if not name:
+                return
+            self.app_ref.add_list_to_proposal(name)
+            return
         if event.button.id == "list_create":
             self.app_ref.push_screen(
                 ListNameScreen("Create list"),
@@ -317,6 +326,11 @@ class ListManagerScreen(ModalScreen[None]):
         if event.key == "escape":
             self.dismiss(None)
             event.stop()
+        elif event.key.lower() == "a":
+            name = self._selected_name()
+            if name:
+                self.app_ref.add_list_to_proposal(name)
+                event.stop()
 
     def _handle_create(self, name: str | None) -> None:
         if not name:
@@ -371,6 +385,12 @@ class KrogetApp(App):
         color: $error;
     }
 
+    #proposal_status {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+
     #left, #center, #right {
         border: solid $panel;
         padding: 1;
@@ -423,12 +443,13 @@ class KrogetApp(App):
     """
 
     BINDINGS = [
-        ("r", "refresh", "Regenerate"),
+        ("r", "refresh", "Refresh"),
         ("p", "pin", "Pin UPC"),
         ("d", "delete", "Remove"),
         ("a", "apply", "Apply"),
         ("s", "save_staple", "Save staple"),
         ("l", "lists", "Lists"),
+        ("c", "clear_proposal", "Clear"),
         ("/", "focus_search", "Search"),
         ("escape", "back", "Back"),
         ("q", "quit", "Quit"),
@@ -456,13 +477,14 @@ class KrogetApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("Mode: Dry-run", id="status")
+        yield Static("", id="proposal_status")
         with Horizontal(id="nav"):
             yield Button("Planner", id="nav_planner")
             yield Button("Search", id="nav_search")
         with Vertical(id="planner_view"):
             with Horizontal(id="main"):
                 with Vertical(id="left"):
-                    yield Static("Staples")
+                    yield Static("Staples", id="staples_title")
                     yield DataTable(id="staples")
                 with Vertical(id="center"):
                     yield Static("Proposal")
@@ -511,39 +533,71 @@ class KrogetApp(App):
         location = self.location_id or "none"
         self.active_list = get_active_list()
         self.sub_title = f"List: {self.active_list} | Location: {location} | Auth: {auth_status}"
+        self._update_staples_title()
+
+    def _update_staples_title(self) -> None:
+        title = self.query_one("#staples_title", Static)
+        title.update(self.active_list or "Staples")
 
     def refresh_data(self) -> None:
         self.active_list = get_active_list()
         self.staples = get_staples(list_name=self.active_list)
-        if not self.staples:
-            self.proposal = None
-            self._populate_tables()
-            self._set_status("No staples configured.", error=True)
-            return
-        if not self.location_id:
-            self.proposal = None
-            self._populate_tables()
-            self._set_status("Default location is not set.", error=True)
-            return
-
-        try:
-            self.proposal, self.pinned = generate_proposal(
-                config=self.config,
-                staples=self.staples,
+        if not self.proposal:
+            self.proposal = Proposal(
+                version="1",
+                created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 location_id=self.location_id,
-                list_name=self.active_list,
-                auto_pin=False,
-                confirm_pin=None,
+                items=[],
+                sources=[],
             )
+        if not self.location_id:
+            self._set_status("Default location is not set.", error=True)
+        else:
             self._set_status("Mode: Dry-run (press 'a' to apply)")
-        except Exception as exc:  # noqa: BLE001
-            self.proposal = None
-            self._set_status(f"Error generating proposal: {exc}", error=True)
         self._populate_tables()
+        self._update_proposal_status()
 
     def on_list_changed(self) -> None:
         self._update_header()
         self.refresh_data()
+
+    def add_list_to_proposal(self, list_name: str) -> None:
+        try:
+            staples = get_staples(list_name=list_name)
+        except ValueError as exc:
+            self._set_status(str(exc), error=True)
+            return
+        if not self.proposal:
+            self.proposal = Proposal(
+                version="1",
+                created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                location_id=self.location_id,
+                items=[],
+                sources=[],
+            )
+        incoming = [
+            ProposalItem(
+                name=staple.name,
+                quantity=staple.quantity,
+                modality=staple.modality,
+                upc=staple.preferred_upc,
+                source=list_name,
+                sources=[list_name],
+            )
+            for staple in staples
+        ]
+        merged_items, added, merged = merge_proposal_items(
+            self.proposal.items,
+            incoming,
+            source=list_name,
+        )
+        self.proposal.items = merged_items
+        sources = set(self.proposal.sources)
+        sources.add(list_name)
+        self.proposal.sources = sorted(sources)
+        self._populate_tables()
+        self._update_proposal_status()
+        self._set_status(f"Added list {list_name} (+{added} items, {merged} merged).")
 
     def _populate_tables(self) -> None:
         staples_table = self.query_one("#staples", DataTable)
@@ -567,11 +621,8 @@ class KrogetApp(App):
             return
 
         for index, item in enumerate(self.proposal.items):
-            pinned = self.pinned.get(item.name, False)
-            if pinned:
-                status = Text("pinned", style="green")
-            elif item.upc:
-                status = Text("auto", style="yellow")
+            if item.upc:
+                status = Text("staged", style="green")
             else:
                 status = Text("missing", style="red")
             proposal_table.add_row(
@@ -609,6 +660,14 @@ class KrogetApp(App):
                     fields["upc"],
                     key=str(index),
                 )
+
+    def _update_proposal_status(self) -> None:
+        status = self.query_one("#proposal_status", Static)
+        if not self.proposal:
+            status.update("Proposal: 0 items")
+            return
+        sources = ", ".join(self.proposal.sources) if self.proposal.sources else "None"
+        status.update(f"Proposal: {len(self.proposal.items)} items | Sources: {sources}")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "proposal":
@@ -697,6 +756,27 @@ class KrogetApp(App):
         if self.active_view == "search":
             self._show_planner_view()
             self._set_status("Back to planner.")
+
+    def action_clear_proposal(self) -> None:
+        if not self.proposal or not self.proposal.items:
+            self._set_status("Proposal is already empty.")
+            return
+        self.push_screen(
+            ConfirmScreen("Clear proposal?", yes_label="Clear", no_label="Cancel"),
+            self._handle_clear_confirm,
+        )
+
+    def _handle_clear_confirm(self, confirmed: bool) -> None:
+        if not confirmed:
+            self._set_status("Clear canceled.")
+            return
+        if not self.proposal:
+            return
+        self.proposal.items = []
+        self.proposal.sources = []
+        self._populate_tables()
+        self._update_proposal_status()
+        self._set_status("Proposal cleared.")
 
     def _handle_confirm(self, confirmed: bool) -> None:
         if not confirmed:

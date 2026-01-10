@@ -25,6 +25,7 @@ class ProposalItem(BaseModel):
     modality: str
     upc: str | None = None
     source: str | None = None
+    sources: list[str] = Field(default_factory=list)
     notes: str | None = None
     alternatives: list[ProposalAlternative] = Field(default_factory=list)
 
@@ -34,6 +35,7 @@ class Proposal(BaseModel):
     created_at: str
     location_id: str | None = None
     items: list[ProposalItem] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path) -> "Proposal":
