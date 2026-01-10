@@ -9,6 +9,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, LoadingIndicator, Static
 
 from kroget.core.product_display import product_display_fields
+from kroget.core.recent_searches import RecentSearchEntry, load_recent_searches, record_recent_search
 from kroget.core.staple_name import normalize_staple_name
 from kroget.core.product_upc import extract_upcs
 from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
@@ -297,6 +298,10 @@ class KrogetApp(App):
         self.search_results: list = []
         self.search_term = ""
         self.active_view = "planner"
+        self.recent_entries: list[RecentSearchEntry] = []
+        self.search_mode = "recent"
+        self.preselect_upc: str | None = None
+        self.search_inflight = False
         self.selection = SelectionState()
 
     def compose(self) -> ComposeResult:
@@ -342,7 +347,7 @@ class KrogetApp(App):
         alt_table.cursor_type = "row"
 
         results_table = self.query_one("#search_results", DataTable)
-        results_table.add_columns("Description", "Size", "Price", "UPC")
+        results_table.add_columns("★", "Description", "Size", "Price", "UPC")
         results_table.cursor_type = "row"
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
@@ -425,15 +430,29 @@ class KrogetApp(App):
     def _populate_search_results(self) -> None:
         table = self.query_one("#search_results", DataTable)
         table.clear()
-        for index, product in enumerate(self.search_results):
-            fields = product_display_fields(product)
-            table.add_row(
-                fields["description"],
-                fields["size"],
-                fields["price"],
-                fields["upc"],
-                key=str(index),
-            )
+        recent_upcs = {entry.upc for entry in self.recent_entries}
+        if self.search_mode == "recent":
+            for index, entry in enumerate(self.recent_entries):
+                table.add_row(
+                    "★",
+                    entry.description or entry.term,
+                    "",
+                    "",
+                    entry.upc,
+                    key=str(index),
+                )
+        else:
+            for index, product in enumerate(self.search_results):
+                fields = product_display_fields(product)
+                star = "★" if fields["upc"] in recent_upcs else ""
+                table.add_row(
+                    star,
+                    fields["description"],
+                    fields["size"],
+                    fields["price"],
+                    fields["upc"],
+                    key=str(index),
+                )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "proposal":
@@ -443,6 +462,11 @@ class KrogetApp(App):
             self.selection.alternative_index = event.cursor_row
         elif event.data_table.id == "search_results":
             self.selection.search_index = event.cursor_row
+            if self.search_mode == "recent":
+                entry = self._current_recent_entry()
+                if entry:
+                    self.preselect_upc = entry.upc
+                    self._start_search(entry.term)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id == "search_results":
@@ -576,6 +600,7 @@ class KrogetApp(App):
             return
         self.active_view = "search"
         self.add_class("search-active")
+        self._load_recent_entries("")
 
     def _show_planner_view(self) -> None:
         if self.active_view == "planner":
@@ -598,15 +623,36 @@ class KrogetApp(App):
                 return
             self._start_search(term)
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "search_input":
+            self._load_recent_entries(event.value)
+
     def _set_search_loading(self, loading: bool) -> None:
         indicator = self.query_one("#search_loading", LoadingIndicator)
         indicator.styles.display = "block" if loading else "none"
+
+    def _load_recent_entries(self, query: str) -> None:
+        entries = load_recent_searches()
+        query = query.strip().lower()
+        if query:
+            entries = [
+                entry
+                for entry in entries
+                if query in entry.term.lower() or query in entry.description.lower()
+            ]
+        self.recent_entries = entries
+        self.search_mode = "recent"
+        self._populate_search_results()
 
     def _start_search(self, term: str) -> None:
         if not self.location_id:
             self._set_status("Default location is not set.", error=True)
             return
+        if self.search_inflight:
+            return
         self.search_term = term
+        self.search_mode = "results"
+        self.search_inflight = True
         self._set_search_loading(True)
         self._set_status(f"Searching '{term}'...")
         self.run_worker(
@@ -639,6 +685,7 @@ class KrogetApp(App):
     def _handle_search_results(self, results, error: str | None) -> None:
         self.search_results = results
         self._set_search_loading(False)
+        self.search_inflight = False
         if error:
             self._set_status(f"Search failed: {error}", error=True)
         else:
@@ -646,6 +693,18 @@ class KrogetApp(App):
         self._populate_search_results()
         if results:
             self.query_one("#search_results", DataTable).focus()
+            if self.preselect_upc:
+                self._preselect_upc_row(self.preselect_upc)
+                self.preselect_upc = None
+
+    def _preselect_upc_row(self, upc: str) -> None:
+        table = self.query_one("#search_results", DataTable)
+        for index, product in enumerate(self.search_results):
+            fields = product_display_fields(product)
+            if fields["upc"] == upc:
+                table.cursor_coordinate = (index, 0)
+                self.selection.search_index = index
+                return
 
     def _current_search_product(self):
         if self.selection.search_index is None:
@@ -655,6 +714,13 @@ class KrogetApp(App):
             self._set_status("Invalid search selection.", error=True)
             return None
         return self.search_results[self.selection.search_index]
+
+    def _current_recent_entry(self) -> RecentSearchEntry | None:
+        if self.selection.search_index is None:
+            return None
+        if self.selection.search_index >= len(self.recent_entries):
+            return None
+        return self.recent_entries[self.selection.search_index]
 
     def _resolve_upc_for_product(self, product) -> str | None:
         fields = product_display_fields(product)
@@ -731,6 +797,11 @@ class KrogetApp(App):
             if errors:
                 self.call_from_thread(self._set_status, errors[0], error=True)
             else:
+                record_recent_search(
+                    term=self.search_term or product.description or "",
+                    upc=upc,
+                    description=product.description or "",
+                )
                 self.call_from_thread(
                     self._set_status,
                     f"Added to cart ({success} ok, {failed} failed).",
@@ -885,6 +956,7 @@ class KrogetApp(App):
                         modality=modality,
                     )
                 )
+            record_recent_search(term=term, upc=upc, description=name)
             self.call_from_thread(self._set_status, f"Saved staple '{name}'.")
             self.call_from_thread(self.refresh_data)
             self.call_from_thread(
@@ -947,7 +1019,15 @@ class KrogetApp(App):
         if not self.query_one("#search_results", DataTable).has_focus:
             return
         if event.key in {"enter", "return"}:
-            self._start_add_to_cart_flow()
+            if self.search_mode == "recent":
+                entry = self._current_recent_entry()
+                if entry:
+                    self.preselect_upc = entry.upc
+                    self._start_search(entry.term)
+                elif self.search_term:
+                    self._start_search(self.search_term)
+            else:
+                self._start_add_to_cart_flow()
             event.stop()
 
 
