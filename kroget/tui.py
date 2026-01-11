@@ -114,6 +114,13 @@ class QuantityScreen(ModalScreen[int | None]):
         self.dismiss(quantity if quantity > 0 else None)
 
 
+def _normalize_modality(value: str | None) -> str:
+    if not value:
+        return "PICKUP"
+    cleaned = value.strip().upper()
+    return cleaned if cleaned in {"PICKUP", "DELIVERY"} else "PICKUP"
+
+
 class StapleScreen(ModalScreen[tuple[str, int] | None]):
     def __init__(
         self,
@@ -126,7 +133,7 @@ class StapleScreen(ModalScreen[tuple[str, int] | None]):
         self.default_name = default_name
         self.default_term = default_term
         self.default_quantity = default_quantity
-        self.modality = default_modality
+        self.modality = _normalize_modality(default_modality)
         self._ready = False
 
     def compose(self) -> ComposeResult:
@@ -134,7 +141,7 @@ class StapleScreen(ModalScreen[tuple[str, int] | None]):
         yield Input(value=self.default_name, id="staple_name")
         yield Input(value=self.default_term, id="staple_term")
         yield Input(value=str(self.default_quantity), id="staple_quantity")
-        yield Button(f"Modality: {self.modality}", id="staple_modality", variant="primary")
+        yield Button(self._modality_label(), id="staple_modality", variant="primary")
         with Horizontal(id="confirm_buttons"):
             yield Button("Save", id="confirm_yes", variant="success")
             yield Button("Cancel", id="confirm_no", variant="error")
@@ -149,7 +156,8 @@ class StapleScreen(ModalScreen[tuple[str, int] | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "staple_modality":
             self.modality = "DELIVERY" if self.modality == "PICKUP" else "PICKUP"
-            event.button.label = f"Modality: {self.modality}"
+            event.button.label = self._modality_label()
+            event.button.refresh()
             return
         if event.button.id == "confirm_no":
             self.dismiss(None)
@@ -166,6 +174,9 @@ class StapleScreen(ModalScreen[tuple[str, int] | None]):
             self.dismiss(None)
             return
         self.dismiss((name, term or name, quantity if quantity > 0 else 1, self.modality))
+
+    def _modality_label(self) -> str:
+        return f"Modality: {self.modality}"
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id not in {"staple_name", "staple_term", "staple_quantity"}:
@@ -522,7 +533,9 @@ class KrogetApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.config = load_kroger_config()
-        self.location_id = ConfigStore().load().default_location_id
+        self.user_config = ConfigStore().load()
+        self.location_id = self.user_config.default_location_id
+        self.default_modality = _normalize_modality(self.user_config.default_modality)
         self.active_list = get_active_list()
         self.staples: list[Staple] = []
         self.proposal: Proposal | None = None
@@ -1378,7 +1391,7 @@ class KrogetApp(App):
                 default_name=default_name,
                 default_term=default_term,
                 default_quantity=1,
-                default_modality="PICKUP",
+                default_modality=self.default_modality,
             ),
             lambda result: self._handle_save_staple(result, upc),
         )
