@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.0 (2026-01-11)
+
+### Feat
+
+- add --version flag to CLI
+
 ## v0.1.1 (2026-01-11)
 
 ### Fix
