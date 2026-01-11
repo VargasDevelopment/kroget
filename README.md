@@ -110,10 +110,12 @@ Typical flow
 CLI examples
 
 ```bash
-kroget search milk
+kroget products search milk --location-id <LOCATION_ID>
 kroget lists list
-kroget lists set Staples
-kroget proposal apply
+kroget lists set-active Staples
+kroget staples add "Milk" --term "milk" --qty 1
+kroget staples propose --location-id <LOCATION_ID> --out proposal.json
+kroget proposal apply proposal.json --apply
 ```
 
 ## Safety model
