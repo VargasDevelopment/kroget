@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field
 
 from kroget.core.product_upc import extract_upcs
@@ -182,16 +184,21 @@ def apply_proposal_items(
     token: str,
     items: list[ProposalItem],
     stop_on_error: bool = False,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, list[str], list["ApplyItemResult"]]:
     success = 0
     failed = 0
     errors: list[str] = []
+    results: list[ApplyItemResult] = []
 
     with KrogerClient(config.base_url) as client:
         for item in items:
             if not item.upc:
                 failed += 1
-                errors.append(f"Missing UPC for {item.name}")
+                message = f"Missing UPC for {item.name}"
+                errors.append(message)
+                results.append(
+                    ApplyItemResult(item=item, status="failed", error=message)
+                )
                 if stop_on_error:
                     break
                 continue
@@ -203,10 +210,22 @@ def apply_proposal_items(
                     modality=item.modality,
                 )
                 success += 1
+                results.append(ApplyItemResult(item=item, status="success", error=None))
             except KrogerAPIError as exc:
                 failed += 1
-                errors.append(f"Failed to add {item.name}: {exc}")
+                message = f"Failed to add {item.name}: {exc}"
+                errors.append(message)
+                results.append(
+                    ApplyItemResult(item=item, status="failed", error=message)
+                )
                 if stop_on_error:
                     break
 
-    return success, failed, errors
+    return success, failed, errors, results
+
+
+@dataclass
+class ApplyItemResult:
+    item: ProposalItem
+    status: str
+    error: str | None = None

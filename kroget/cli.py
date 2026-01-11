@@ -12,6 +12,7 @@ from rich.table import Table
 
 from kroget.core.product_upc import extract_upcs, pick_upc
 from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
+from kroget.core.sent_items import load_sent_sessions, record_sent_session, session_from_apply_results
 from kroget.core.storage import (
     ConfigError,
     ConfigStore,
@@ -41,6 +42,7 @@ openapi_app = typer.Typer(help="OpenAPI utilities")
 staples_app = typer.Typer(help="Staples commands")
 proposal_app = typer.Typer(help="Proposal commands")
 lists_app = typer.Typer(help="List management commands")
+sent_app = typer.Typer(help="Sent items history commands")
 
 app.add_typer(products_app, name="products")
 app.add_typer(auth_app, name="auth")
@@ -50,6 +52,7 @@ app.add_typer(openapi_app, name="openapi")
 app.add_typer(staples_app, name="staples")
 app.add_typer(proposal_app, name="proposal")
 app.add_typer(lists_app, name="lists")
+app.add_typer(sent_app, name="sent")
 
 console = Console()
 
@@ -655,6 +658,64 @@ def lists_delete(name: str = typer.Argument(..., help="List name")) -> None:
     console.print(f"[green]Deleted list:[/green] {name}")
 
 
+@sent_app.command("list")
+def sent_list(as_json: bool = typer.Option(False, "--json", help="Output raw JSON")) -> None:
+    """List sent sessions."""
+    sessions = load_sent_sessions()
+    if as_json:
+        payload = {"sessions": [session.to_dict() for session in sessions]}
+        console.print_json(json.dumps(payload))
+        return
+    table = Table(title="Sent Sessions")
+    table.add_column("Session ID", style="bold")
+    table.add_column("Started")
+    table.add_column("Finished")
+    table.add_column("Location")
+    table.add_column("OK")
+    table.add_column("Failed")
+    table.add_column("Sources")
+    for session in sessions:
+        ok = sum(1 for item in session.items if item.status == "success")
+        failed = sum(1 for item in session.items if item.status == "failed")
+        table.add_row(
+            session.session_id,
+            session.started_at,
+            session.finished_at,
+            session.location_id or "",
+            str(ok),
+            str(failed),
+            ", ".join(session.sources),
+        )
+    console.print(table)
+
+
+@sent_app.command("show")
+def sent_show(session_id: str = typer.Argument(..., help="Session ID")) -> None:
+    """Show a sent session."""
+    sessions = load_sent_sessions()
+    session = next((s for s in sessions if s.session_id == session_id), None)
+    if not session:
+        console.print(f"[red]Session not found:[/red] {session_id}")
+        raise typer.Exit(code=1)
+    table = Table(title=f"Sent Items ({session_id})")
+    table.add_column("Name", style="bold")
+    table.add_column("UPC")
+    table.add_column("Qty")
+    table.add_column("Modality")
+    table.add_column("Status")
+    table.add_column("Error")
+    for item in session.items:
+        table.add_row(
+            item.name,
+            item.upc,
+            str(item.quantity),
+            item.modality,
+            item.status,
+            item.error or "",
+        )
+    console.print(table)
+
+
 @proposal_app.command("apply")
 def proposal_apply(
     proposal_path: Path = typer.Argument(..., help="Proposal JSON file"),
@@ -695,14 +756,26 @@ def proposal_apply(
             console.print("[yellow]Aborted.[/yellow]")
             raise typer.Exit(code=1)
 
-    success, failed, errors = apply_proposal_items(
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    success, failed, errors, results = apply_proposal_items(
         config=config,
         token=token.access_token,
         items=proposal.items,
         stop_on_error=stop_on_error,
     )
+    finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for error in errors:
         console.print(f"[red]{error}[/red]")
+
+    session = session_from_apply_results(
+        results,
+        location_id=proposal.location_id,
+        sources=proposal.sources,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+    record_sent_session(session)
+
     console.print(f"[green]Applied:[/green] {success} succeeded, {failed} failed")
 
 

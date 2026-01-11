@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
+import webbrowser
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -12,6 +13,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, LoadingInd
 from kroget.core.product_display import product_display_fields
 from kroget.core.recent_searches import RecentSearchEntry, load_recent_searches, record_recent_search
 from kroget.core.staple_name import normalize_staple_name
+from kroget.core.sent_items import load_sent_sessions, record_sent_session, session_from_apply_results
 from kroget.core.product_upc import extract_upcs
 from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
 from kroget.core.proposal_merge import merge_proposal_items
@@ -39,6 +41,7 @@ class SelectionState:
     proposal_index: int | None = None
     alternative_index: int | None = None
     search_index: int | None = None
+    sent_index: int | None = None
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -416,6 +419,21 @@ class KrogetApp(App):
         display: block;
     }
 
+    #sent_view {
+        height: 1fr;
+        display: none;
+        border: solid $panel;
+        padding: 1;
+    }
+
+    .sent-active #planner_view {
+        display: none;
+    }
+
+    .sent-active #sent_view {
+        display: block;
+    }
+
     #search_controls {
         height: 3;
     }
@@ -450,6 +468,7 @@ class KrogetApp(App):
         ("s", "save_staple", "Save staple"),
         ("l", "lists", "Lists"),
         ("c", "clear_proposal", "Clear"),
+        ("o", "open_cart", "Open cart"),
         ("/", "focus_search", "Search"),
         ("escape", "back", "Back"),
         ("q", "quit", "Quit"),
@@ -472,6 +491,7 @@ class KrogetApp(App):
         self.search_mode = "recent"
         self.preselect_upc: str | None = None
         self.search_inflight = False
+        self.sent_sessions: list[SentSession] = []
         self.selection = SelectionState()
 
     def compose(self) -> ComposeResult:
@@ -481,6 +501,7 @@ class KrogetApp(App):
         with Horizontal(id="nav"):
             yield Button("Planner", id="nav_planner")
             yield Button("Search", id="nav_search")
+            yield Button("Sent", id="nav_sent")
         with Vertical(id="planner_view"):
             with Horizontal(id="main"):
                 with Vertical(id="left"):
@@ -498,6 +519,11 @@ class KrogetApp(App):
                 yield Input(placeholder="Search Kroger products...", id="search_input")
             yield LoadingIndicator(id="search_loading")
             yield DataTable(id="search_results")
+        with Vertical(id="sent_view"):
+            yield Static("Sent to Kroger (local history)")
+            with Horizontal():
+                yield DataTable(id="sent_sessions")
+                yield DataTable(id="sent_items")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -520,6 +546,14 @@ class KrogetApp(App):
         results_table = self.query_one("#search_results", DataTable)
         results_table.add_columns("★", "Description", "Size", "Price", "UPC")
         results_table.cursor_type = "row"
+
+        sessions_table = self.query_one("#sent_sessions", DataTable)
+        sessions_table.add_columns("Started", "OK", "Failed", "Sources")
+        sessions_table.cursor_type = "row"
+
+        items_table = self.query_one("#sent_items", DataTable)
+        items_table.add_columns("Name", "Qty", "Status", "Error")
+        items_table.cursor_type = "row"
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
         status = self.query_one("#status", Static)
@@ -661,6 +695,27 @@ class KrogetApp(App):
                     key=str(index),
                 )
 
+    def _populate_sent(self) -> None:
+        sessions_table = self.query_one("#sent_sessions", DataTable)
+        items_table = self.query_one("#sent_items", DataTable)
+        sessions_table.clear()
+        items_table.clear()
+        for index, session in enumerate(self.sent_sessions):
+            ok = sum(1 for item in session.items if item.status == "success")
+            failed = sum(1 for item in session.items if item.status == "failed")
+            sources = ", ".join(session.sources)
+            sessions_table.add_row(
+                session.started_at,
+                str(ok),
+                str(failed),
+                sources,
+                key=str(index),
+            )
+        if self.sent_sessions:
+            sessions_table.cursor_coordinate = (0, 0)
+            self.selection.sent_index = 0
+            self._update_sent_items()
+
     def _update_proposal_status(self) -> None:
         status = self.query_one("#proposal_status", Static)
         if not self.proposal:
@@ -668,6 +723,22 @@ class KrogetApp(App):
             return
         sources = ", ".join(self.proposal.sources) if self.proposal.sources else "None"
         status.update(f"Proposal: {len(self.proposal.items)} items | Sources: {sources}")
+
+    def _update_sent_items(self) -> None:
+        items_table = self.query_one("#sent_items", DataTable)
+        items_table.clear()
+        if self.selection.sent_index is None:
+            return
+        if self.selection.sent_index >= len(self.sent_sessions):
+            return
+        session = self.sent_sessions[self.selection.sent_index]
+        for item in session.items:
+            items_table.add_row(
+                item.name,
+                str(item.quantity),
+                item.status,
+                item.error or "",
+            )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "proposal":
@@ -682,10 +753,16 @@ class KrogetApp(App):
                 if entry:
                     self.preselect_upc = entry.upc
                     self._start_search(entry.term)
+        elif event.data_table.id == "sent_sessions":
+            self.selection.sent_index = event.cursor_row
+            self._update_sent_items()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id == "search_results":
             self.selection.search_index = event.cursor_row
+        elif event.data_table.id == "sent_sessions":
+            self.selection.sent_index = event.cursor_row
+            self._update_sent_items()
 
     def _update_alternatives(self) -> None:
         alt_table = self.query_one("#alternatives", DataTable)
@@ -705,6 +782,9 @@ class KrogetApp(App):
             self.refresh_data()
         elif self.active_view == "search" and self.search_term:
             self._start_search(self.search_term)
+        elif self.active_view == "sent":
+            self.sent_sessions = load_sent_sessions()
+            self._populate_sent()
 
     def action_delete(self) -> None:
         if self.active_view != "planner":
@@ -753,7 +833,7 @@ class KrogetApp(App):
     def action_back(self) -> None:
         if self.screen.is_modal:
             return
-        if self.active_view == "search":
+        if self.active_view in {"search", "sent"}:
             self._show_planner_view()
             self._set_status("Back to planner.")
 
@@ -765,6 +845,11 @@ class KrogetApp(App):
             ConfirmScreen("Clear proposal?", yes_label="Clear", no_label="Cancel"),
             self._handle_clear_confirm,
         )
+
+    def action_open_cart(self) -> None:
+        if self.active_view != "sent":
+            return
+        webbrowser.open("https://www.kroger.com/cart")
 
     def _handle_clear_confirm(self, confirmed: bool) -> None:
         if not confirmed:
@@ -796,13 +881,24 @@ class KrogetApp(App):
         except auth.KrogerAuthError as exc:
             self.call_from_thread(self._set_status, str(exc), error=True)
             return
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        success, failed, errors = apply_proposal_items(
+        success, failed, errors, results = apply_proposal_items(
             config=self.config,
             token=token.access_token,
             items=self.proposal.items if self.proposal else [],
             stop_on_error=False,
         )
+        finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        session = session_from_apply_results(
+            results,
+            location_id=self.location_id,
+            sources=self.proposal.sources if self.proposal else [],
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        record_sent_session(session)
         if errors:
             message = errors[0]
             self.call_from_thread(self._set_status, message, error=True)
@@ -846,6 +942,7 @@ class KrogetApp(App):
             return
         self.active_view = "search"
         self.add_class("search-active")
+        self.remove_class("sent-active")
         self._load_recent_entries("")
 
     def _show_planner_view(self) -> None:
@@ -853,6 +950,17 @@ class KrogetApp(App):
             return
         self.active_view = "planner"
         self.remove_class("search-active")
+        self.remove_class("sent-active")
+
+    def _show_sent_view(self) -> None:
+        if self.active_view == "sent":
+            return
+        self.active_view = "sent"
+        self.add_class("sent-active")
+        self.remove_class("search-active")
+        self.sent_sessions = load_sent_sessions()
+        self._populate_sent()
+        self._set_status("Sent to Kroger (local history).")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "nav_search":
@@ -860,6 +968,8 @@ class KrogetApp(App):
             self.query_one("#search_input", Input).focus()
         elif event.button.id == "nav_planner":
             self._show_planner_view()
+        elif event.button.id == "nav_sent":
+            self._show_sent_view()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "search_input":
@@ -1034,12 +1144,22 @@ class KrogetApp(App):
                 modality="PICKUP",
                 upc=upc,
             )
-            success, failed, errors = apply_proposal_items(
+            started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            success, failed, errors, results = apply_proposal_items(
                 config=self.config,
                 token=token.access_token,
                 items=[item],
                 stop_on_error=False,
             )
+            finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            session = session_from_apply_results(
+                results,
+                location_id=self.location_id,
+                sources=[],
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            record_sent_session(session)
             if errors:
                 self.call_from_thread(self._set_status, errors[0], error=True)
             else:
