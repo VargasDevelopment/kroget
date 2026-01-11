@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
 import time
@@ -62,6 +63,31 @@ console = Console()
 
 DEFAULT_REDIRECT_URI = "http://localhost:8400/callback"
 KROGER_PORTAL_URL = "https://developer.kroger.com/"
+
+
+def _print_version(value: bool) -> None:
+    if not value:
+        return
+    try:
+        version = importlib.metadata.version("kroget")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown"
+    typer.echo(f"kroget {version}")
+    raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-v",
+        help="Show the kroget version and exit.",
+        callback=_print_version,
+        is_eager=True,
+    ),
+) -> None:
+    return
 
 
 def _load_config() -> KrogerConfig:
