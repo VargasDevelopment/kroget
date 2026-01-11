@@ -46,6 +46,7 @@ class SentSession:
     location_id: str | None
     sources: list[str]
     items: list[SentItem]
+    kind: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "SentSession":
@@ -61,10 +62,11 @@ class SentSession:
             location_id=(str(data.get("location_id")) if data.get("location_id") else None),
             sources=[str(source) for source in data.get("sources", [])],
             items=items,
+            kind=str(data.get("kind")) if data.get("kind") else None,
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "session_id": self.session_id,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -72,19 +74,37 @@ class SentSession:
             "sources": self.sources,
             "items": [item.to_dict() for item in self.items],
         }
+        if self.kind:
+            payload["kind"] = self.kind
+        return payload
 
 
 class SentItemsStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (Path.home() / ".kroget" / "sent_items.json")
 
+    def _ensure_empty_file(self) -> None:
+        payload = {"sessions": []}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp_path.chmod(0o600)
+        tmp_path.replace(self.path)
+
     def load(self) -> list[SentSession]:
         if not self.path.exists():
+            self._ensure_empty_file()
             return []
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
             return []
-        sessions = data.get("sessions", [])
+        if isinstance(data, list):
+            sessions = data
+        elif isinstance(data, dict):
+            sessions = data.get("sessions", [])
+        else:
+            return []
         if not isinstance(sessions, list):
             return []
         return [
@@ -112,9 +132,42 @@ def _now_iso() -> str:
 def new_session_id() -> str:
     return str(uuid.uuid4())
 
+def _looks_like_seed_session(session: SentSession) -> bool:
+    if session.kind == "seed":
+        return True
+    if not session.items:
+        return True
+    if session.kind is not None:
+        return False
+    if session.location_id is not None:
+        return False
+    if session.sources:
+        return False
+    if session.started_at != session.finished_at:
+        return False
+    if any(item.upc for item in session.items):
+        return False
+    return True
+
+
+def load_sent_sessions_with_cleanup(path: Path | None = None) -> tuple[list[SentSession], int]:
+    store = SentItemsStore(path)
+    sessions = store.load()
+    cleaned: list[SentSession] = []
+    removed = 0
+    for session in sessions:
+        if _looks_like_seed_session(session):
+            removed += 1
+            continue
+        cleaned.append(session)
+    if removed:
+        store.save(cleaned)
+    return cleaned, removed
+
 
 def load_sent_sessions(path: Path | None = None) -> list[SentSession]:
-    return SentItemsStore(path).load()
+    sessions, _ = load_sent_sessions_with_cleanup(path)
+    return sessions
 
 
 def save_sent_sessions(sessions: list[SentSession], path: Path | None = None) -> None:
@@ -129,6 +182,8 @@ def record_sent_session(
 ) -> list[SentSession]:
     store = SentItemsStore(path)
     sessions = store.load()
+    if not session.items:
+        return sessions
     sessions.insert(0, session)
     sessions = sessions[:max_sessions]
     store.save(sessions)
@@ -140,6 +195,7 @@ def session_from_apply_results(
     *,
     location_id: str | None,
     sources: list[str],
+    kind: str | None = "apply",
     started_at: str | None = None,
     finished_at: str | None = None,
     session_id: str | None = None,
@@ -165,4 +221,5 @@ def session_from_apply_results(
         location_id=location_id,
         sources=sources,
         items=items,
+        kind=kind,
     )

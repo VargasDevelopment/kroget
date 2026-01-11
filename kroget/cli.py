@@ -25,6 +25,7 @@ from kroget.core.storage import (
     get_active_list,
     get_staples,
     list_names,
+    move_item,
     remove_staple,
     rename_list,
     set_active_list,
@@ -353,16 +354,32 @@ def staples_list(
 
 @staples_app.command("remove")
 def staples_remove(
-    name: str = typer.Argument(..., help="Staple name"),
+    identifier: str = typer.Argument(..., help="Staple name or preferred UPC"),
     list_name: str | None = typer.Option(None, "--list", help="List name override"),
 ) -> None:
     """Remove a staple."""
     try:
-        remove_staple(name, list_name=list_name)
+        remove_staple(identifier, list_name=list_name)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
-    console.print(f"[green]Removed staple:[/green] {name}")
+    console.print(f"[green]Removed staple:[/green] {identifier}")
+
+
+@staples_app.command("move")
+def staples_move(
+    identifier: str = typer.Argument(..., help="Staple name or preferred UPC"),
+    to_list: str = typer.Option(..., "--to", help="Target list name"),
+    from_list: str | None = typer.Option(None, "--from", help="Source list override"),
+) -> None:
+    """Move a staple to another list."""
+    source_list = from_list or get_active_list()
+    try:
+        move_item(source_list, to_list, identifier)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Moved staple to:[/green] {to_list}")
 
 
 @staples_app.command("set")

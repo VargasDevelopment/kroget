@@ -13,7 +13,11 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, LoadingInd
 from kroget.core.product_display import product_display_fields
 from kroget.core.recent_searches import RecentSearchEntry, load_recent_searches, record_recent_search
 from kroget.core.staple_name import normalize_staple_name
-from kroget.core.sent_items import load_sent_sessions, record_sent_session, session_from_apply_results
+from kroget.core.sent_items import (
+    load_sent_sessions_with_cleanup,
+    record_sent_session,
+    session_from_apply_results,
+)
 from kroget.core.product_upc import extract_upcs
 from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
 from kroget.core.proposal_merge import merge_proposal_items
@@ -28,6 +32,8 @@ from kroget.core.storage import (
     get_active_list,
     get_staples,
     list_names,
+    move_item,
+    remove_staple,
     rename_list,
     set_active_list,
     update_staple,
@@ -236,6 +242,42 @@ class ListNameScreen(ModalScreen[str | None]):
             return
         name = self.query_one("#list_name", Input).value.strip()
         self.dismiss(name if name else None)
+
+
+class ListSelectScreen(ModalScreen[str | None]):
+    def __init__(self, title: str, lists: list[str]) -> None:
+        super().__init__()
+        self.title = title
+        self.lists = lists
+        self.selection = 0
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.title, id="confirm_message")
+        table = DataTable(id="list_select")
+        table.add_columns("List")
+        table.cursor_type = "row"
+        for index, name in enumerate(self.lists):
+            table.add_row(name, key=str(index))
+        yield table
+        with Horizontal(id="confirm_buttons"):
+            yield Button("Select", id="confirm_yes", variant="success")
+            yield Button("Cancel", id="confirm_no", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#list_select", DataTable).focus()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table.id == "list_select":
+            self.selection = event.cursor_row
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm_no":
+            self.dismiss(None)
+            return
+        if 0 <= self.selection < len(self.lists):
+            self.dismiss(self.lists[self.selection])
+        else:
+            self.dismiss(None)
 
 
 class ListManagerScreen(ModalScreen[None]):
@@ -464,6 +506,7 @@ class KrogetApp(App):
         ("r", "refresh", "Refresh"),
         ("p", "pin", "Pin UPC"),
         ("d", "delete", "Remove"),
+        ("m", "move", "Move"),
         ("a", "apply", "Apply"),
         ("s", "save_staple", "Save staple"),
         ("l", "lists", "Lists"),
@@ -534,6 +577,7 @@ class KrogetApp(App):
     def _setup_tables(self) -> None:
         staples_table = self.query_one("#staples", DataTable)
         staples_table.add_columns("Name", "Term", "Qty", "UPC", "Modality")
+        staples_table.cursor_type = "row"
 
         proposal_table = self.query_one("#proposal", DataTable)
         proposal_table.add_columns("Name", "Qty", "UPC", "Modality", "Status")
@@ -758,7 +802,10 @@ class KrogetApp(App):
             self._update_sent_items()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.data_table.id == "search_results":
+        if event.data_table.id == "proposal":
+            self.selection.proposal_index = event.cursor_row
+            self._update_alternatives()
+        elif event.data_table.id == "search_results":
             self.selection.search_index = event.cursor_row
         elif event.data_table.id == "sent_sessions":
             self.selection.sent_index = event.cursor_row
@@ -783,21 +830,111 @@ class KrogetApp(App):
         elif self.active_view == "search" and self.search_term:
             self._start_search(self.search_term)
         elif self.active_view == "sent":
-            self.sent_sessions = load_sent_sessions()
+            self.sent_sessions, cleaned = load_sent_sessions_with_cleanup()
             self._populate_sent()
+            if cleaned:
+                self._set_status(f"Cleaned up {cleaned} seed history entries.")
 
     def action_delete(self) -> None:
         if self.active_view != "planner":
-            self._set_status("Switch to Planner to remove proposal items.", error=True)
+            self._set_status("Switch to Planner to remove items.", error=True)
             return
-        if not self.proposal or self.selection.proposal_index is None:
-            self._set_status("Select a proposal item to remove.", error=True)
+        staples_table = self.query_one("#staples", DataTable)
+        proposal_table = self.query_one("#proposal", DataTable)
+        if staples_table.has_focus:
+            self._prompt_remove_staple()
             return
-        del self.proposal.items[self.selection.proposal_index]
-        self.selection.proposal_index = None
-        self.selection.alternative_index = None
+        if proposal_table.has_focus:
+            if not self.proposal or self.selection.proposal_index is None:
+                self._set_status("Select a proposal item to remove.", error=True)
+                return
+            del self.proposal.items[self.selection.proposal_index]
+            self.selection.proposal_index = None
+            self.selection.alternative_index = None
+            self._populate_tables()
+            self._set_status("Removed item from proposal.")
+            return
+        self._set_status("Select a staple or proposal item to remove.", error=True)
+
+    def action_move(self) -> None:
+        if self.active_view != "planner":
+            self._set_status("Switch to Planner to move staples.", error=True)
+            return
+        staples_table = self.query_one("#staples", DataTable)
+        if not staples_table.has_focus:
+            self._set_status("Select a staple to move.", error=True)
+            return
+        if not self.staples:
+            self._set_status("No staples to move.", error=True)
+            return
+        targets = [name for name in list_names() if name != self.active_list]
+        if not targets:
+            self._set_status("No other lists available.", error=True)
+            return
+        index = staples_table.cursor_row
+        if index is None or index >= len(self.staples):
+            self._set_status("Select a staple to move.", error=True)
+            return
+        staple = self.staples[index]
+        self.push_screen(
+            ListSelectScreen("Move to list", targets),
+            lambda target: self._confirm_move_staple(staple, target),
+        )
+
+    def _prompt_remove_staple(self) -> None:
+        if not self.staples:
+            self._set_status("No staples to remove.", error=True)
+            return
+        table = self.query_one("#staples", DataTable)
+        index = table.cursor_row
+        if index is None or index >= len(self.staples):
+            self._set_status("Select a staple to remove.", error=True)
+            return
+        staple = self.staples[index]
+        message = f"Remove '{staple.name}' from list '{self.active_list}'?"
+        self.push_screen(
+            ConfirmScreen(message, yes_label="Remove", no_label="Cancel"),
+            lambda confirmed: self._handle_remove_staple(confirmed, staple),
+        )
+
+    def _handle_remove_staple(self, confirmed: bool, staple: Staple) -> None:
+        if not confirmed:
+            self._set_status("Remove canceled.")
+            return
+        identifier = staple.preferred_upc or staple.name
+        try:
+            remove_staple(identifier, list_name=self.active_list)
+        except ValueError as exc:
+            self._set_status(str(exc), error=True)
+            return
+        self.staples = get_staples(list_name=self.active_list)
         self._populate_tables()
-        self._set_status("Removed item from proposal.")
+        self._set_status(f"Removed from {self.active_list}")
+
+    def _confirm_move_staple(self, staple: Staple, target: str | None) -> None:
+        if not target:
+            self._set_status("Move canceled.")
+            return
+        message = f"Move '{staple.name}' from '{self.active_list}' to '{target}'?"
+        self.push_screen(
+            ConfirmScreen(message, yes_label="Move", no_label="Cancel"),
+            lambda confirmed: self._handle_move_staple(confirmed, staple, target),
+        )
+
+    def _handle_move_staple(self, confirmed: bool, staple: Staple, target: str) -> None:
+        if not confirmed:
+            self._set_status("Move canceled.")
+            return
+        identifier = staple.preferred_upc or staple.name
+        try:
+            move_item(self.active_list, target, identifier)
+        except ValueError as exc:
+            self._set_status(str(exc), error=True)
+            return
+        self.staples = get_staples(list_name=self.active_list)
+        self._populate_tables()
+        self._set_status(f"Moved to {target}")
+
 
     def action_pin(self) -> None:
         if self.active_view == "search":
@@ -958,9 +1095,12 @@ class KrogetApp(App):
         self.active_view = "sent"
         self.add_class("sent-active")
         self.remove_class("search-active")
-        self.sent_sessions = load_sent_sessions()
+        self.sent_sessions, cleaned = load_sent_sessions_with_cleanup()
         self._populate_sent()
-        self._set_status("Sent to Kroger (local history).")
+        if cleaned:
+            self._set_status(f"Cleaned up {cleaned} seed history entries.")
+        else:
+            self._set_status("Sent to Kroger (local history).")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "nav_search":
@@ -1156,6 +1296,7 @@ class KrogetApp(App):
                 results,
                 location_id=self.location_id,
                 sources=[],
+                kind="quick_add",
                 started_at=started_at,
                 finished_at=finished_at,
             )

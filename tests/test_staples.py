@@ -40,3 +40,27 @@ def test_staples_file_schema(tmp_path):
     path.write_text(json.dumps(payload))
     staples = get_staples(lists_path=path, staples_path=staples_path)
     assert staples[0].name == "eggs"
+
+
+def test_remove_staple_by_preferred_upc(tmp_path):
+    path = tmp_path / "lists.json"
+    staples_path = tmp_path / "staples.json"
+    staple = Staple(name="milk", term="milk", quantity=1, preferred_upc="000111")
+    add_staple(staple, lists_path=path, staples_path=staples_path)
+
+    remove_staple("000111", lists_path=path, staples_path=staples_path)
+
+    staples = get_staples(lists_path=path, staples_path=staples_path)
+    assert staples == []
+
+
+def test_remove_staple_by_name_case_insensitive(tmp_path):
+    path = tmp_path / "lists.json"
+    staples_path = tmp_path / "staples.json"
+    staple = Staple(name="Eggs", term="eggs", quantity=1)
+    add_staple(staple, lists_path=path, staples_path=staples_path)
+
+    remove_staple("eggs", lists_path=path, staples_path=staples_path)
+
+    staples = get_staples(lists_path=path, staples_path=staples_path)
+    assert staples == []

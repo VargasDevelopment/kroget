@@ -228,6 +228,17 @@ def _save_lists_data(
     os.replace(tmp_path, lists_path)
 
 
+def _find_staple_index(staples: list[Staple], identifier: str) -> int | None:
+    for index, staple in enumerate(staples):
+        if staple.preferred_upc and staple.preferred_upc == identifier:
+            return index
+    lowered = identifier.lower()
+    for index, staple in enumerate(staples):
+        if staple.name.lower() == lowered:
+            return index
+    return None
+
+
 def list_names(
     *,
     lists_path: Path | None = None,
@@ -359,7 +370,7 @@ def add_staple(
 
 
 def remove_staple(
-    name: str,
+    identifier: str,
     *,
     list_name: str | None = None,
     lists_path: Path | None = None,
@@ -370,10 +381,53 @@ def remove_staple(
     if list_name not in lists:
         raise ValueError(f"List '{list_name}' not found")
     staples = lists[list_name]
-    filtered = [staple for staple in staples if staple.name != name]
-    if len(filtered) == len(staples):
-        raise ValueError(f"Staple '{name}' not found")
-    lists[list_name] = filtered
+    match_index = _find_staple_index(staples, identifier)
+    if match_index is None:
+        raise ValueError(f"Staple '{identifier}' not found")
+    staples.pop(match_index)
+    lists[list_name] = staples
+    _save_lists_data(active, lists, lists_path)
+
+
+def move_item(
+    source_list: str,
+    target_list: str,
+    item_identifier: str,
+    *,
+    lists_path: Path | None = None,
+    staples_path: Path | None = None,
+) -> None:
+    active, lists = _load_lists_data(lists_path, staples_path)
+    if source_list not in lists:
+        raise ValueError(f"List '{source_list}' not found")
+    if target_list not in lists:
+        raise ValueError(f"List '{target_list}' not found")
+    if source_list == target_list:
+        raise ValueError("Source and target lists must be different")
+
+    source_staples = list(lists[source_list])
+    target_staples = list(lists[target_list])
+
+    match_index = _find_staple_index(source_staples, item_identifier)
+    if match_index is None:
+        raise ValueError(f"Staple '{item_identifier}' not found")
+    staple = source_staples.pop(match_index)
+
+    if staple.preferred_upc:
+        target_index = None
+        for index, existing in enumerate(target_staples):
+            if existing.preferred_upc == staple.preferred_upc:
+                target_index = index
+                break
+        if target_index is not None:
+            target_staples[target_index].quantity += staple.quantity
+        else:
+            target_staples.append(staple)
+    else:
+        target_staples.append(staple)
+
+    lists[source_list] = source_staples
+    lists[target_list] = target_staples
     _save_lists_data(active, lists, lists_path)
 
 
