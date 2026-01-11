@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
@@ -25,6 +27,7 @@ from kroget.core.storage import (
     get_active_list,
     get_staples,
     list_names,
+    load_kroger_config,
     move_item,
     remove_staple,
     rename_list,
@@ -57,10 +60,13 @@ app.add_typer(sent_app, name="sent")
 
 console = Console()
 
+DEFAULT_REDIRECT_URI = "http://localhost:8400/callback"
+KROGER_PORTAL_URL = "https://developer.kroger.com/"
+
 
 def _load_config() -> KrogerConfig:
     try:
-        return KrogerConfig.from_env()
+        return load_kroger_config()
     except ConfigError as exc:
         console.print(f"[red]Config error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -75,6 +81,46 @@ def _resolve_location_id(location_id: str | None) -> str | None:
         return location_id
     config = _load_user_config()
     return config.default_location_id
+
+
+def _run_doctor_checks(
+    *,
+    config: KrogerConfig,
+    location_id: str | None,
+    term: str,
+) -> None:
+    console.print("[bold]Kroger API doctor[/bold]")
+    try:
+        token = auth.get_client_credentials_token(
+            base_url=config.base_url,
+            client_id=config.client_id,
+            client_secret=config.client_secret,
+            scopes=["product.compact"],
+        )
+        console.print("[green]OK[/green] client credentials token acquired")
+    except auth.KrogerAuthError as exc:
+        console.print(f"[red]FAIL[/red] token request failed: {exc}")
+        raise
+
+    resolved_location_id = _resolve_location_id(location_id)
+
+    if resolved_location_id:
+        try:
+            with KrogerClient(config.base_url) as client:
+                results = client.products_search(
+                    token.access_token, term=term, location_id=resolved_location_id, limit=1
+                )
+            count = len(results.data)
+            console.print(
+                f"[green]OK[/green] product search returned {count} item(s) for '{term}'"
+            )
+        except KrogerAPIError as exc:
+            console.print(f"[red]FAIL[/red] product search failed: {exc}")
+            raise
+    else:
+        console.print(
+            "[yellow]SKIP[/yellow] product search (no --location-id or default set)"
+        )
 
 
 def _format_products_table(products):
@@ -165,40 +211,165 @@ def doctor(
 ) -> None:
     """Validate Kroger API connectivity and credentials."""
     config = _load_config()
-    console.print("[bold]Kroger API doctor[/bold]")
-
     try:
-        token = auth.get_client_credentials_token(
-            base_url=config.base_url,
-            client_id=config.client_id,
-            client_secret=config.client_secret,
-            scopes=["product.compact"],
-        )
-        console.print("[green]OK[/green] client credentials token acquired")
-    except auth.KrogerAuthError as exc:
-        console.print(f"[red]FAIL[/red] token request failed: {exc}")
+        _run_doctor_checks(config=config, location_id=location_id, term=term)
+    except (auth.KrogerAuthError, KrogerAPIError) as exc:
         raise typer.Exit(code=1) from exc
 
-    resolved_location_id = _resolve_location_id(location_id)
 
-    if resolved_location_id:
-        try:
-            with KrogerClient(config.base_url) as client:
-                results = client.products_search(
-                    token.access_token, term=term, location_id=resolved_location_id, limit=1
-                )
-            count = len(results.data)
-            console.print(
-                f"[green]OK[/green] product search returned {count} item(s) for '{term}'"
-            )
-        except KrogerAPIError as exc:
-            console.print(f"[red]FAIL[/red] product search failed: {exc}")
-            raise typer.Exit(code=1) from exc
-    else:
-        console.print(
-            "[yellow]SKIP[/yellow] product search (no --location-id or default set)"
+@app.command()
+def setup(
+    client_id: str | None = typer.Option(None, "--client-id", help="Kroger client ID"),
+    client_secret: str | None = typer.Option(
+        None, "--client-secret", help="Kroger client secret"
+    ),
+    redirect_uri: str | None = typer.Option(
+        None, "--redirect-uri", help="OAuth redirect URI"
+    ),
+    location_id: str | None = typer.Option(
+        None, "--location-id", help="Default location ID"
+    ),
+    open_portal: bool | None = typer.Option(
+        None,
+        "--open-portal/--no-open-portal",
+        help="Open Kroger developer portal",
+    ),
+    run_login: bool | None = typer.Option(
+        None,
+        "--run-login/--no-run-login",
+        help="Run kroget auth login after setup",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Accept defaults and skip confirmations"),
+) -> None:
+    """Guided setup for Kroger API credentials.
+
+    Examples:
+      kroget setup
+      kroget setup --client-id ... --client-secret ... --redirect-uri http://localhost:8400/callback
+      kroget setup --client-id ... --client-secret ... --redirect-uri http://localhost:8400/callback --location-id 01400441
+    """
+    load_dotenv()
+    store = ConfigStore()
+    config = store.load()
+
+    env_client_id = os.getenv("KROGER_CLIENT_ID")
+    env_client_secret = os.getenv("KROGER_CLIENT_SECRET")
+    env_redirect_uri = os.getenv("KROGER_REDIRECT_URI")
+
+    has_client_id = bool(client_id or config.kroger_client_id or env_client_id)
+    has_client_secret = bool(client_secret or config.kroger_client_secret or env_client_secret)
+    missing_creds = not (has_client_id and has_client_secret)
+
+    if missing_creds:
+        console.print("[bold]Kroger developer app setup[/bold]")
+        console.print("1) Create a Kroger developer app (Production).")
+        console.print("2) Enable Products (Public) + Cart (Public) + Profile (Public)+ Location (Public).")
+        console.print("3) Set redirect URI to:")
+        console.print(f"   {redirect_uri or config.kroger_redirect_uri or DEFAULT_REDIRECT_URI}")
+
+    if open_portal is None:
+        open_portal = missing_creds
+    if open_portal:
+        should_open = yes or typer.confirm(
+            "Open Kroger developer portal in your browser?", default=True
         )
+        if should_open:
+            opened = webbrowser.open(KROGER_PORTAL_URL)
+            if not opened:
+                console.print("Open this URL to continue:")
+                console.print(KROGER_PORTAL_URL)
 
+    if client_id is not None:
+        config.kroger_client_id = client_id.strip() or None
+    elif not config.kroger_client_id and env_client_id and not yes:
+        if typer.confirm("Use KROGER_CLIENT_ID from environment for config.json?", default=False):
+            config.kroger_client_id = env_client_id
+    if not config.kroger_client_id:
+        if yes:
+            console.print("[red]Missing required client ID. Pass --client-id or run without --yes.[/red]")
+            raise typer.Exit(code=1)
+        value = typer.prompt("Kroger Client ID")
+        config.kroger_client_id = value.strip() or None
+
+    if client_secret is not None:
+        config.kroger_client_secret = client_secret.strip() or None
+    elif not config.kroger_client_secret and env_client_secret and not yes:
+        if typer.confirm(
+            "Use KROGER_CLIENT_SECRET from environment for config.json?", default=False
+        ):
+            config.kroger_client_secret = env_client_secret
+    if not config.kroger_client_secret:
+        if yes:
+            console.print(
+                "[red]Missing required client secret. Pass --client-secret or run without --yes.[/red]"
+            )
+            raise typer.Exit(code=1)
+        value = typer.prompt("Kroger Client Secret", hide_input=True)
+        config.kroger_client_secret = value.strip() or None
+
+    default_redirect = config.kroger_redirect_uri or DEFAULT_REDIRECT_URI
+    if redirect_uri is not None:
+        config.kroger_redirect_uri = redirect_uri.strip() or None
+    elif not config.kroger_redirect_uri and env_redirect_uri and not yes:
+        if typer.confirm(
+            "Use KROGER_REDIRECT_URI from environment for config.json?", default=False
+        ):
+            config.kroger_redirect_uri = env_redirect_uri
+    if not config.kroger_redirect_uri:
+        if yes:
+            config.kroger_redirect_uri = default_redirect
+        else:
+            value = typer.prompt("Redirect URI", default=default_redirect)
+            config.kroger_redirect_uri = value.strip() or None
+
+    if location_id is not None:
+        config.default_location_id = location_id.strip() or None
+    elif not yes:
+        value = typer.prompt(
+            "Default location ID (optional)",
+            default=config.default_location_id or "",
+            show_default=bool(config.default_location_id),
+        )
+        config.default_location_id = value.strip() or None
+
+    if config.default_modality is None:
+        if yes:
+            config.default_modality = "PICKUP"
+        else:
+            value = typer.prompt(
+                "Default modality (PICKUP or DELIVERY)",
+                default=config.default_modality or "PICKUP",
+            ).strip().upper()
+            if value not in {"PICKUP", "DELIVERY"}:
+                console.print("[red]Invalid modality. Use PICKUP or DELIVERY.[/red]")
+                raise typer.Exit(code=1)
+            config.default_modality = value
+
+    store.save(config)
+    console.print("[green]Saved config:[/green] ~/.kroget/config.json")
+
+    try:
+        validated = load_kroger_config(store=store)
+        _run_doctor_checks(
+            config=validated,
+            location_id=config.default_location_id,
+            term="milk",
+        )
+    except (ConfigError, auth.KrogerAuthError, KrogerAPIError) as exc:
+        console.print(f"[red]Setup validation failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if run_login is None:
+        if yes:
+            run_login = False
+        else:
+            run_login = typer.confirm(
+                "Do you want to log in now to enable cart actions?", default=False
+            )
+    if run_login:
+        auth_login()
+    else:
+        console.print("Run `kroget auth login` when you're ready.")
 
 @products_app.command("search")
 def products_search(

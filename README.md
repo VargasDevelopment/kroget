@@ -64,6 +64,18 @@ This will:
 - open the Kroger developer portal
 - validate your config
 
+Non-interactive (scripted) setup:
+
+```bash
+kroget setup \
+  --client-id ... \
+  --client-secret ... \
+  --redirect-uri http://localhost:8400/callback \
+  --location-id 01400441 \
+  --no-open-portal \
+  --no-run-login
+```
+
 Step 2: Log in
 
 ```bash
@@ -168,7 +180,8 @@ kroget cart add --location-id <LOCATION_ID> --product-id <UPC> --quantity 1 --ap
 
 ### Environment
 
-Create a `.env` in the repo root with:
+Environment variables always override `~/.kroget/config.json`.
+For local development, you can also create a `.env` in the repo root with:
 
 ```
 KROGER_CLIENT_ID=...

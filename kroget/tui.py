@@ -23,7 +23,6 @@ from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, g
 from kroget.core.proposal_merge import merge_proposal_items
 from kroget.core.storage import (
     ConfigStore,
-    KrogerConfig,
     Staple,
     TokenStore,
     add_staple,
@@ -32,6 +31,7 @@ from kroget.core.storage import (
     get_active_list,
     get_staples,
     list_names,
+    load_kroger_config,
     move_item,
     remove_staple,
     rename_list,
@@ -521,7 +521,7 @@ class KrogetApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.config = KrogerConfig.from_env()
+        self.config = load_kroger_config()
         self.location_id = ConfigStore().load().default_location_id
         self.active_list = get_active_list()
         self.staples: list[Staple] = []

@@ -44,6 +44,40 @@ class KrogerConfig:
         )
 
 
+def _clean_optional_str(value: object) -> str | None:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned if cleaned else None
+    return None
+
+
+def load_kroger_config(store: "ConfigStore | None" = None) -> KrogerConfig:
+    load_dotenv()
+    store = store or ConfigStore()
+    config = store.load()
+    client_id = os.getenv("KROGER_CLIENT_ID") or config.kroger_client_id
+    client_secret = os.getenv("KROGER_CLIENT_SECRET") or config.kroger_client_secret
+    redirect_uri = os.getenv("KROGER_REDIRECT_URI") or config.kroger_redirect_uri
+    base_url = os.getenv("KROGER_BASE_URL", "https://api.kroger.com").rstrip("/")
+
+    missing = [name for name, value in (
+        ("kroger_client_id", client_id),
+        ("kroger_client_secret", client_secret),
+    ) if not value]
+    if missing:
+        raise ConfigError(
+            "Missing required config values: "
+            f"{', '.join(missing)}. "
+            "Set environment variables or run `kroget setup`."
+        )
+
+    return KrogerConfig(
+        client_id=client_id or "",
+        client_secret=client_secret or "",
+        redirect_uri=redirect_uri,
+        base_url=base_url,
+    )
+
 class TokenStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (Path.home() / ".kroget" / "tokens.json")
@@ -64,14 +98,35 @@ class TokenStore:
 
 @dataclass
 class UserConfig:
+    kroger_client_id: str | None = None
+    kroger_client_secret: str | None = None
+    kroger_redirect_uri: str | None = None
     default_location_id: str | None = None
+    default_modality: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "UserConfig":
-        return cls(default_location_id=data.get("default_location_id"))  # type: ignore[arg-type]
+        return cls(
+            kroger_client_id=_clean_optional_str(data.get("kroger_client_id")),
+            kroger_client_secret=_clean_optional_str(data.get("kroger_client_secret")),
+            kroger_redirect_uri=_clean_optional_str(data.get("kroger_redirect_uri")),
+            default_location_id=_clean_optional_str(data.get("default_location_id")),
+            default_modality=_clean_optional_str(data.get("default_modality")),
+        )
 
     def to_dict(self) -> dict[str, object]:
-        return {"default_location_id": self.default_location_id}
+        payload: dict[str, object] = {}
+        if self.kroger_client_id:
+            payload["kroger_client_id"] = self.kroger_client_id
+        if self.kroger_client_secret:
+            payload["kroger_client_secret"] = self.kroger_client_secret
+        if self.kroger_redirect_uri:
+            payload["kroger_redirect_uri"] = self.kroger_redirect_uri
+        if self.default_location_id:
+            payload["default_location_id"] = self.default_location_id
+        if self.default_modality:
+            payload["default_modality"] = self.default_modality
+        return payload
 
 
 class ConfigStore:
