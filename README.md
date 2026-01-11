@@ -184,6 +184,15 @@ kroget auth login
 kroget cart add --location-id <LOCATION_ID> --product-id <UPC> --quantity 1 --apply
 ```
 
+## Releasing
+
+Releases are tag-driven and follow Conventional Commits. Versions come from git tags via `setuptools-scm`.
+
+Steps:
+1) Ensure commits follow Conventional Commits (e.g., `fix: ...`, `feat: ...`).
+2) Run `cz bump` to update `CHANGELOG.md` and create the tag.
+3) Push with `git push --follow-tags`, then `git push`.
+
 ### Environment
 
 Environment variables always override `~/.kroget/config.json`.

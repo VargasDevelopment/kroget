@@ -1,16 +1,16 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kroget"
-version = "0.1.0"
 description = "Kroger shopping CLI"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Kroget Contributors" }]
 license = { text = "MIT" }
 keywords = ["kroger", "cli"]
+dynamic = ["version"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
@@ -27,6 +27,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "build",
+  "commitizen",
   "pytest",
   "pytest-asyncio",
   "ruff",
@@ -38,6 +40,19 @@ kroget = "kroget.cli:app"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["kroget*"]
+
+[tool.setuptools_scm]
+tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
+local_scheme = "no-local-version"
+version_scheme = "release-branch-semver"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "semver"
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
 
 [tool.ruff]
 line-length = 100
