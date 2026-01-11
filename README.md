@@ -2,6 +2,8 @@
 
 Kro-Get is a terminal-first CLI/TUI for composing Kroger grocery carts from reusable lists and recurring staples. It helps you plan quickly, review clearly, and apply changes only when you say so.
 
+![Kro-Get TUI](assets/tui-planner.png)
+
 It lets you:
 - keep grocery staples as reusable lists
 - search Kroger's catalog from the terminal
@@ -10,6 +12,8 @@ It lets you:
 - finish checkout in the browser by design
 
 Kro-Get cannot place orders or charge you money. The most it can do is add items to your cart after you confirm.
+
+![Kro-Get TUI](assets/tui-search.png)
 
 ## Why Kro-Get exists
 
