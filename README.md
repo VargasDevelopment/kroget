@@ -225,6 +225,12 @@ curl -X GET \
   -H 'Authorization: Bearer <ACCESS_TOKEN>'
 ```
 
+## Support
+
+If Kro-Get saved you time or grocery brainpower, you can support my open-source work here ☕
+
+[![Buy Me a Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://www.buymeacoffee.com/ByVargas)
+
 ## License
 
 MIT
