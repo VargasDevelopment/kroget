@@ -870,6 +870,8 @@ class KrogetApp(App):
         if event.data_table.id == "proposal":
             self.selection.proposal_index = event.cursor_row
             self._update_alternatives()
+        elif event.data_table.id == "alternatives":
+            self.selection.alternative_index = event.cursor_row
         elif event.data_table.id == "search_results":
             self.selection.search_index = event.cursor_row
         elif event.data_table.id == "sent_sessions":
@@ -1035,6 +1037,7 @@ class KrogetApp(App):
 
     def action_refresh(self) -> None:
         if self.active_view == "planner":
+            self.alternatives_state = {}
             self.refresh_data()
         elif self.active_view == "search" and self.search_term:
             self._start_search(self.search_term)
@@ -1274,6 +1277,8 @@ class KrogetApp(App):
         item.upc = chosen.upc
         item.source = "preferred"
         self.pinned[item.name] = True
+        item.alternatives = []
+        self.alternatives_state.pop(id(item), None)
         for staple in self.staples:
             if staple.name == item.name:
                 staple.preferred_upc = chosen.upc
