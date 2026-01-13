@@ -653,11 +653,50 @@ class KrogetApp(App):
         self.refresh_data()
 
     def add_list_to_proposal(self, list_name: str) -> None:
+        if not self.location_id:
+            self._set_status("Default location is not set.", error=True)
+            return
+        self._set_status(f"Generating proposal for {list_name}...")
+        self.run_worker(
+            lambda: self._add_list_worker(list_name),
+            group="proposal",
+            exclusive=True,
+            exit_on_error=False,
+            thread=True,
+        )
+
+    def _add_list_worker(self, list_name: str) -> None:
         try:
             staples = get_staples(list_name=list_name)
         except ValueError as exc:
-            self._set_status(str(exc), error=True)
+            self.call_from_thread(self._set_status, str(exc), error=True)
             return
+        if not staples:
+            self.call_from_thread(self._set_status, f"No staples found in {list_name}.")
+            return
+        try:
+            proposal, pinned = generate_proposal(
+                config=self.config,
+                staples=staples,
+                location_id=self.location_id or "",
+                list_name=list_name,
+                auto_pin=False,
+                confirm_pin=None,
+            )
+        except auth.KrogerAuthError as exc:
+            self.call_from_thread(self._set_status, f"Token error: {exc}", error=True)
+            return
+        except KrogerAPIError as exc:
+            self.call_from_thread(self._set_status, f"Search failed: {exc}", error=True)
+            return
+        self.call_from_thread(self._handle_add_list, list_name, proposal.items, pinned)
+
+    def _handle_add_list(
+        self,
+        list_name: str,
+        incoming: list[ProposalItem],
+        pinned: dict[str, bool],
+    ) -> None:
         if not self.proposal:
             self.proposal = Proposal(
                 version="1",
@@ -666,17 +705,6 @@ class KrogetApp(App):
                 items=[],
                 sources=[],
             )
-        incoming = [
-            ProposalItem(
-                name=staple.name,
-                quantity=staple.quantity,
-                modality=staple.modality,
-                upc=staple.preferred_upc,
-                source=list_name,
-                sources=[list_name],
-            )
-            for staple in staples
-        ]
         merged_items, added, merged = merge_proposal_items(
             self.proposal.items,
             incoming,
@@ -686,6 +714,7 @@ class KrogetApp(App):
         sources = set(self.proposal.sources)
         sources.add(list_name)
         self.proposal.sources = sorted(sources)
+        self.pinned.update(pinned)
         self._populate_tables()
         self._update_proposal_status()
         self._set_status(f"Added list {list_name} (+{added} items, {merged} merged).")

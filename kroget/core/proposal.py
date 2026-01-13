@@ -57,6 +57,32 @@ def generate_proposal(
     auto_pin: bool = False,
     confirm_pin: Callable[[Staple, str], bool] | None = None,
 ) -> tuple[Proposal, dict[str, bool]]:
+    def _extract_product_upcs(
+        client: KrogerClient,
+        token: str,
+        product: object,
+        location_id: str,
+    ) -> list[str]:
+        upcs: list[str] = []
+        items = getattr(product, "items", None)
+        if items:
+            for item in items:
+                if isinstance(item, dict) and isinstance(item.get("upc"), str):
+                    upcs.append(item["upc"])
+        if not upcs:
+            product_id = getattr(product, "productId", None)
+            if isinstance(product_id, str):
+                try:
+                    payload = client.get_product(
+                        token,
+                        product_id=product_id,
+                        location_id=location_id,
+                    )
+                    upcs = extract_upcs(payload)
+                except KrogerAPIError:
+                    upcs = []
+        return upcs
+
     token = auth.get_client_credentials_token(
         base_url=config.base_url,
         client_id=config.client_id,
@@ -72,16 +98,15 @@ def generate_proposal(
             chosen_upc = staple.preferred_upc
             alternatives: list[ProposalAlternative] = []
             source = "preferred" if chosen_upc else "search"
-
-            if not chosen_upc:
-                try:
-                    results = client.products_search(
-                        token.access_token,
-                        term=staple.term,
-                        location_id=location_id,
-                        limit=5,
-                    )
-                except KrogerAPIError as exc:
+            try:
+                results = client.products_search(
+                    token.access_token,
+                    term=staple.term,
+                    location_id=location_id,
+                    limit=5,
+                )
+            except KrogerAPIError as exc:
+                if not chosen_upc:
                     items.append(
                         ProposalItem(
                             name=staple.name,
@@ -95,23 +120,16 @@ def generate_proposal(
                     )
                     pinned[staple.name] = False
                     continue
+                results = None
 
+            if results:
                 for product in results.data[:3]:
-                    upcs = []
-                    if product.items:
-                        for item in product.items:
-                            if isinstance(item, dict) and isinstance(item.get("upc"), str):
-                                upcs.append(item["upc"])
-                    if not upcs:
-                        try:
-                            payload = client.get_product(
-                                token.access_token,
-                                product_id=product.productId,
-                                location_id=location_id,
-                            )
-                            upcs = extract_upcs(payload)
-                        except KrogerAPIError:
-                            upcs = []
+                    upcs = _extract_product_upcs(
+                        client,
+                        token.access_token,
+                        product,
+                        location_id,
+                    )
                     if upcs:
                         alternatives.append(
                             ProposalAlternative(
@@ -120,23 +138,14 @@ def generate_proposal(
                             )
                         )
 
-                if results.data:
+                if not chosen_upc and results.data:
                     first = results.data[0]
-                    first_upcs = []
-                    if first.items:
-                        for item in first.items:
-                            if isinstance(item, dict) and isinstance(item.get("upc"), str):
-                                first_upcs.append(item["upc"])
-                    if not first_upcs:
-                        try:
-                            payload = client.get_product(
-                                token.access_token,
-                                product_id=first.productId,
-                                location_id=location_id,
-                            )
-                            first_upcs = extract_upcs(payload)
-                        except KrogerAPIError:
-                            first_upcs = []
+                    first_upcs = _extract_product_upcs(
+                        client,
+                        token.access_token,
+                        first,
+                        location_id,
+                    )
                     if first_upcs:
                         chosen_upc = first_upcs[0]
 

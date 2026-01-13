@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 
@@ -55,6 +56,17 @@ def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
         lambda **_: _dummy_token(),
     )
 
+    calls = {"search": 0}
+
+    class DummyProduct:
+        def __init__(self, upc: str, description: str) -> None:
+            self.productId = f"id-{upc}"
+            self.description = description
+            self.items = [{"upc": upc}]
+
+    class DummyResults:
+        data = [DummyProduct("000222", "Alt Milk")]
+
     class DummyClient:
         def __init__(self, base_url: str) -> None:
             self.base_url = base_url
@@ -66,7 +78,8 @@ def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
             return None
 
         def products_search(self, *args, **kwargs):
-            raise AssertionError("products_search should not be called")
+            calls["search"] += 1
+            return DummyResults()
 
     monkeypatch.setattr("kroget.core.proposal.KrogerClient", DummyClient)
 
@@ -84,7 +97,10 @@ def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
         ],
     )
     assert result.exit_code == 0
-    assert "000111" in result.output
+    payload = json.loads(result.output)
+    assert payload["items"][0]["upc"] == "000111"
+    assert payload["items"][0]["alternatives"][0]["upc"] == "000222"
+    assert calls["search"] == 1
 
 
 def test_staples_propose_searches(monkeypatch, tmp_path):
