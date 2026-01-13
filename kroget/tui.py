@@ -19,7 +19,12 @@ from kroget.core.sent_items import (
     session_from_apply_results,
 )
 from kroget.core.product_upc import extract_upcs
-from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
+from kroget.core.proposal import (
+    Proposal,
+    ProposalAlternative,
+    ProposalItem,
+    apply_proposal_items,
+)
 from kroget.core.proposal_merge import merge_proposal_items
 from kroget.core.storage import (
     ConfigStore,
@@ -48,6 +53,24 @@ class SelectionState:
     alternative_index: int | None = None
     search_index: int | None = None
     sent_index: int | None = None
+
+
+@dataclass
+class AlternativesState:
+    status: str
+    error: str | None = None
+
+
+def _apply_alternatives_to_item(
+    item: ProposalItem,
+    alternatives: list[ProposalAlternative],
+) -> bool:
+    item.alternatives = alternatives
+    if not item.upc and alternatives:
+        item.upc = alternatives[0].upc
+        item.source = "search"
+        return True
+    return False
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -447,6 +470,17 @@ class KrogetApp(App):
         color: $text-muted;
     }
 
+    #alternatives_status {
+        height: 1;
+        padding: 0 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
+
+    #alternatives_status.error {
+        color: $error;
+    }
+
     #left, #center, #right {
         border: solid $panel;
         padding: 1;
@@ -515,7 +549,7 @@ class KrogetApp(App):
 
     BINDINGS = [
         ("r", "refresh", "Refresh"),
-        ("p", "pin", "Pin UPC"),
+        ("p", "pin", "Use alternative"),
         ("d", "delete", "Remove"),
         ("m", "move", "Move"),
         ("a", "apply", "Apply"),
@@ -549,6 +583,8 @@ class KrogetApp(App):
         self.search_inflight = False
         self.sent_sessions: list[SentSession] = []
         self.selection = SelectionState()
+        self.alternatives_state: dict[int, AlternativesState] = {}
+        self.proposal_terms: dict[tuple[str, str], str] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -568,6 +604,7 @@ class KrogetApp(App):
                     yield DataTable(id="proposal")
                 with Vertical(id="right"):
                     yield Static("Alternatives")
+                    yield Static("", id="alternatives_status")
                     yield DataTable(id="alternatives")
         with Vertical(id="search_view"):
             yield Static("Search")
@@ -612,6 +649,14 @@ class KrogetApp(App):
         items_table.add_columns("Name", "Qty", "Status", "Error")
         items_table.cursor_type = "row"
 
+    def _set_alternatives_status(self, message: str | None, *, error: bool = False) -> None:
+        status = self.query_one("#alternatives_status", Static)
+        status.update(message or "")
+        status.remove_class("error")
+        if error:
+            status.add_class("error")
+        status.styles.display = "block" if message else "none"
+
     def _set_status(self, message: str, *, error: bool = False) -> None:
         status = self.query_one("#status", Static)
         status.update(message)
@@ -653,50 +698,14 @@ class KrogetApp(App):
         self.refresh_data()
 
     def add_list_to_proposal(self, list_name: str) -> None:
-        if not self.location_id:
-            self._set_status("Default location is not set.", error=True)
-            return
-        self._set_status(f"Generating proposal for {list_name}...")
-        self.run_worker(
-            lambda: self._add_list_worker(list_name),
-            group="proposal",
-            exclusive=True,
-            exit_on_error=False,
-            thread=True,
-        )
-
-    def _add_list_worker(self, list_name: str) -> None:
         try:
             staples = get_staples(list_name=list_name)
         except ValueError as exc:
-            self.call_from_thread(self._set_status, str(exc), error=True)
+            self._set_status(str(exc), error=True)
             return
         if not staples:
-            self.call_from_thread(self._set_status, f"No staples found in {list_name}.")
+            self._set_status(f"No staples found in {list_name}.")
             return
-        try:
-            proposal, pinned = generate_proposal(
-                config=self.config,
-                staples=staples,
-                location_id=self.location_id or "",
-                list_name=list_name,
-                auto_pin=False,
-                confirm_pin=None,
-            )
-        except auth.KrogerAuthError as exc:
-            self.call_from_thread(self._set_status, f"Token error: {exc}", error=True)
-            return
-        except KrogerAPIError as exc:
-            self.call_from_thread(self._set_status, f"Search failed: {exc}", error=True)
-            return
-        self.call_from_thread(self._handle_add_list, list_name, proposal.items, pinned)
-
-    def _handle_add_list(
-        self,
-        list_name: str,
-        incoming: list[ProposalItem],
-        pinned: dict[str, bool],
-    ) -> None:
         if not self.proposal:
             self.proposal = Proposal(
                 version="1",
@@ -705,6 +714,19 @@ class KrogetApp(App):
                 items=[],
                 sources=[],
             )
+        for staple in staples:
+            self.proposal_terms[(staple.name, staple.modality)] = staple.term
+        incoming = [
+            ProposalItem(
+                name=staple.name,
+                quantity=staple.quantity,
+                modality=staple.modality,
+                upc=staple.preferred_upc,
+                source="preferred" if staple.preferred_upc else "search",
+                sources=[list_name],
+            )
+            for staple in staples
+        ]
         merged_items, added, merged = merge_proposal_items(
             self.proposal.items,
             incoming,
@@ -714,7 +736,7 @@ class KrogetApp(App):
         sources = set(self.proposal.sources)
         sources.add(list_name)
         self.proposal.sources = sorted(sources)
-        self.pinned.update(pinned)
+        self.alternatives_state = {}
         self._populate_tables()
         self._update_proposal_status()
         self._set_status(f"Added list {list_name} (+{added} items, {merged} merged).")
@@ -727,6 +749,7 @@ class KrogetApp(App):
         staples_table.clear()
         proposal_table.clear()
         alt_table.clear()
+        self._set_alternatives_status(None)
 
         for staple in self.staples:
             staples_table.add_row(
@@ -857,14 +880,158 @@ class KrogetApp(App):
         alt_table = self.query_one("#alternatives", DataTable)
         alt_table.clear()
         if not self.proposal or self.selection.proposal_index is None:
+            self._set_alternatives_status(None)
             return
         item = self.proposal.items[self.selection.proposal_index]
-        for index, alt in enumerate(item.alternatives):
-            alt_table.add_row(
-                alt.upc,
-                alt.description or "",
-                key=str(index),
+        item_id = id(item)
+        state = self.alternatives_state.get(item_id)
+        if state and state.status == "loading":
+            self._set_alternatives_status("Loading alternatives...")
+            return
+        if state and state.status == "error":
+            self._set_alternatives_status(state.error or "Failed to load alternatives.", error=True)
+            return
+        if item.alternatives:
+            self._set_alternatives_status(None)
+            for index, alt in enumerate(item.alternatives):
+                alt_table.add_row(
+                    alt.upc,
+                    alt.description or "",
+                    key=str(index),
+                )
+            return
+        if state and state.status == "loaded":
+            self._set_alternatives_status("No alternatives found.")
+            return
+        self._start_alternatives_fetch(item)
+
+    def _start_alternatives_fetch(self, item: ProposalItem) -> None:
+        if not self.location_id:
+            self._set_alternatives_status("Set a default location to load alternatives.", error=True)
+            return
+        item_id = id(item)
+        term = self.proposal_terms.get((item.name, item.modality), item.name)
+        self.alternatives_state[item_id] = AlternativesState(status="loading")
+        self._set_alternatives_status("Loading alternatives...")
+        self.selection.alternative_index = None
+        self.run_worker(
+            lambda: self._alternatives_worker(item_id, term),
+            group=f"alternatives-{item_id}",
+            exclusive=True,
+            exit_on_error=False,
+            thread=True,
+        )
+
+    def _alternatives_worker(self, item_id: int, term: str) -> None:
+        try:
+            token = auth.get_client_credentials_token(
+                base_url=self.config.base_url,
+                client_id=self.config.client_id,
+                client_secret=self.config.client_secret,
+                scopes=["product.compact"],
             )
+            with KrogerClient(self.config.base_url) as client:
+                results = client.products_search(
+                    token.access_token,
+                    term=term,
+                    location_id=self.location_id or "",
+                    limit=5,
+                )
+                alternatives = self._build_alternatives(
+                    client,
+                    token.access_token,
+                    results.data,
+                )
+            self.call_from_thread(self._handle_alternatives_result, item_id, alternatives, None)
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self._handle_alternatives_result, item_id, [], str(exc))
+
+    def _build_alternatives(
+        self,
+        client: KrogerClient,
+        token: str,
+        products: list,
+    ) -> list[ProposalAlternative]:
+        alternatives: list[ProposalAlternative] = []
+        for product in products[:3]:
+            upcs = self._extract_product_upcs(client, token, product)
+            if upcs:
+                alternatives.append(
+                    ProposalAlternative(
+                        upc=upcs[0],
+                        description=product.description,
+                    )
+                )
+        return alternatives
+
+    def _extract_product_upcs(self, client: KrogerClient, token: str, product: object) -> list[str]:
+        upcs: list[str] = []
+        items = getattr(product, "items", None)
+        if items:
+            for item in items:
+                if isinstance(item, dict) and isinstance(item.get("upc"), str):
+                    upcs.append(item["upc"])
+        if not upcs:
+            product_id = getattr(product, "productId", None)
+            if isinstance(product_id, str):
+                try:
+                    payload = client.get_product(
+                        token,
+                        product_id=product_id,
+                        location_id=self.location_id or "",
+                    )
+                    upcs = extract_upcs(payload)
+                except KrogerAPIError:
+                    upcs = []
+        return upcs
+
+    def _handle_alternatives_result(
+        self,
+        item_id: int,
+        alternatives: list[ProposalAlternative],
+        error: str | None,
+    ) -> None:
+        if error:
+            self.alternatives_state[item_id] = AlternativesState(
+                status="error",
+                error=f"Alternatives unavailable: {error}",
+            )
+        else:
+            self.alternatives_state[item_id] = AlternativesState(status="loaded")
+        item = self._find_item_by_id(item_id)
+        updated_upc = False
+        if item and not error:
+            updated_upc = _apply_alternatives_to_item(item, alternatives)
+        if updated_upc:
+            self._populate_tables()
+            self._restore_proposal_selection(item_id)
+        if self._selected_item_id() == item_id:
+            self._update_alternatives()
+
+    def _find_item_by_id(self, item_id: int) -> ProposalItem | None:
+        if not self.proposal:
+            return None
+        for item in self.proposal.items:
+            if id(item) == item_id:
+                return item
+        return None
+
+    def _restore_proposal_selection(self, item_id: int) -> None:
+        if not self.proposal:
+            return
+        proposal_table = self.query_one("#proposal", DataTable)
+        for index, item in enumerate(self.proposal.items):
+            if id(item) == item_id:
+                self.selection.proposal_index = index
+                proposal_table.cursor_coordinate = (index, 0)
+                break
+
+    def _selected_item_id(self) -> int | None:
+        if not self.proposal or self.selection.proposal_index is None:
+            return None
+        if self.selection.proposal_index >= len(self.proposal.items):
+            return None
+        return id(self.proposal.items[self.selection.proposal_index])
 
     def action_refresh(self) -> None:
         if self.active_view == "planner":
