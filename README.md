@@ -161,10 +161,6 @@ You can inspect, back up, or delete these at any time.
 
 This is a personal automation tool, not a SaaS.
 
-## OpenAPI specs
-
-This repository includes Kroger OpenAPI specifications under `openapi/` for development and reference. These are used to validate requests and build confidence in API behavior.
-
 ## Not affiliated
 
 Kro-Get is not affiliated with Kroger. Use is subject to Kroger's API Terms of Service.

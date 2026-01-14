@@ -43,7 +43,6 @@ products_app = typer.Typer(help="Product search commands")
 auth_app = typer.Typer(help="Authentication commands")
 cart_app = typer.Typer(help="Cart commands")
 locations_app = typer.Typer(help="Location commands")
-openapi_app = typer.Typer(help="OpenAPI utilities")
 staples_app = typer.Typer(help="Staples commands")
 proposal_app = typer.Typer(help="Proposal commands")
 lists_app = typer.Typer(help="List management commands")
@@ -53,7 +52,6 @@ app.add_typer(products_app, name="products")
 app.add_typer(auth_app, name="auth")
 app.add_typer(cart_app, name="cart")
 app.add_typer(locations_app, name="locations")
-app.add_typer(openapi_app, name="openapi")
 app.add_typer(staples_app, name="staples")
 app.add_typer(proposal_app, name="proposal")
 app.add_typer(lists_app, name="lists")
@@ -760,59 +758,6 @@ def locations_set_default(location_id: str = typer.Argument(..., help="Location 
     store.save(config)
     console.print(f"[green]Default location set:[/green] {location_id}")
 
-
-@openapi_app.command("check")
-def openapi_check(
-    spec_dir: Path = typer.Option(Path("openapi"), "--dir", help="Directory of specs"),
-) -> None:
-    """Check required OpenAPI operations exist."""
-    required = {
-        "kroger-location-openapi.json": {
-            ("/v1/locations", "get"),
-            ("/v1/locations/{locationId}", "get"),
-        },
-        "kroger-products-openapi.json": {
-            ("/v1/products", "get"),
-            ("/v1/products/{id}", "get"),
-        },
-        "kroger-cart-openapi.json": {
-            ("/v1/cart/add", "put"),
-        },
-        "kroger-identity-openapi.json": {
-            ("/v1/identity/profile", "get"),
-        },
-    }
-
-    all_ok = True
-    for filename, expected in required.items():
-        path = spec_dir / filename
-        if not path.exists():
-            console.print(f"[red]FAIL[/red] {filename} missing")
-            all_ok = False
-            continue
-
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            console.print(f"[red]FAIL[/red] {filename} invalid JSON: {exc}")
-            all_ok = False
-            continue
-
-        paths = payload.get("paths", {})
-        missing = []
-        for route, method in sorted(expected):
-            methods = paths.get(route, {}) if isinstance(paths, dict) else {}
-            if not isinstance(methods, dict) or method not in methods:
-                missing.append(f"{method.upper()} {route}")
-
-        if missing:
-            console.print(f"[red]FAIL[/red] {filename} missing: {', '.join(missing)}")
-            all_ok = False
-        else:
-            console.print(f"[green]OK[/green] {filename}")
-
-    if not all_ok:
-        raise typer.Exit(code=1)
 
 
 @lists_app.command("list")
