@@ -6,6 +6,16 @@ from kroget.cli import app
 
 
 def _patch_storage_paths(monkeypatch, tmp_path):
+    """
+    Configure the application's storage path resolvers to use temporary JSON files and return those paths.
+    
+    Parameters:
+        monkeypatch: pytest monkeypatch fixture used to override attribute resolvers.
+        tmp_path: Path-like temporary directory in which `lists.json` and `staples.json` are created.
+    
+    Returns:
+        (lists_path, staples_path): Tuple of Path objects for the temporary `lists.json` and `staples.json` files.
+    """
     lists_path = tmp_path / "lists.json"
     staples_path = tmp_path / "staples.json"
     monkeypatch.setattr("kroget.core.storage._default_lists_path", lambda: lists_path)
@@ -14,6 +24,16 @@ def _patch_storage_paths(monkeypatch, tmp_path):
 
 
 def test_lists_items_crud(monkeypatch, tmp_path):
+    """
+    End-to-end CLI test for creating, updating, moving, and removing items within lists.
+    
+    Performs the following flow:
+    - Creates a list "Weekly" and sets it active.
+    - Adds an item "Milk" (term "milk") with quantity 2 to the active list and verifies via JSON output.
+    - Updates "Milk" quantity to 3.
+    - Creates a list "Pantry", moves "Milk" to "Pantry", sets "Pantry" active, and verifies quantity remains 3.
+    - Removes "Milk" and verifies the items list is empty.
+    """
     _patch_storage_paths(monkeypatch, tmp_path)
     runner = CliRunner()
 
@@ -69,6 +89,11 @@ def test_lists_items_crud(monkeypatch, tmp_path):
 
 
 def test_staples_deprecated_still_works(monkeypatch, tmp_path):
+    """
+    Verify the deprecated `staples` command emits a deprecation warning and still adds an item to the Staples list.
+    
+    Asserts that invoking `staples add Milk --term milk` succeeds and produces a deprecation warning, and that listing items for "Staples" returns the added "Milk" item.
+    """
     _patch_storage_paths(monkeypatch, tmp_path)
     runner = CliRunner()
 

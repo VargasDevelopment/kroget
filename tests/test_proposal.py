@@ -32,6 +32,12 @@ def test_proposal_serialize_roundtrip(tmp_path):
 
 
 def _dummy_token():
+    """
+    Create a StoredToken populated with deterministic test values and a one-hour expiry.
+    
+    Returns:
+        StoredToken: token with access "access", refresh "refresh", token_type "bearer", expires_at one hour from now, obtained_at set to the current time, and scopes ["product.compact"].
+    """
     now = int(time.time())
     return StoredToken(
         access_token="access",
@@ -44,6 +50,18 @@ def _dummy_token():
 
 
 def _load_json_from_output(output: str) -> dict:
+    """
+    Extracts and parses the first JSON object found in a string.
+    
+    Parameters:
+        output (str): Text containing a JSON payload (e.g., command output or captured logs).
+    
+    Returns:
+        dict: The parsed JSON object.
+    
+    Raises:
+        AssertionError: If no JSON payload (no '{' character) is found in the input.
+    """
     start = output.find("{")
     if start == -1:
         raise AssertionError("No JSON payload found in output")
@@ -51,6 +69,11 @@ def _load_json_from_output(output: str) -> dict:
 
 
 def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
+    """
+    Verify that proposing staples prefers a staple's preferred UPC and includes searched alternatives.
+    
+    Sets Kroger credentials and patches staples retrieval, authentication, and KrogerClient to simulate a single staple with preferred_upc "000111" and a search result with UPC "000222". Asserts that the proposal output uses "000111" as the primary item UPC, includes "000222" as an alternative, and that a single product search was performed.
+    """
     staple = Staple(name="milk", term="milk", quantity=2, preferred_upc="000111")
 
     monkeypatch.setenv("KROGER_CLIENT_ID", "id")
@@ -111,6 +134,11 @@ def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
 
 
 def test_lists_items_propose_prefers_upc(monkeypatch, tmp_path):
+    """
+    Verifies the `lists items propose` CLI command prefers a staple's preferred UPC and includes alternatives from product search.
+    
+    Asserts the command exits successfully, the primary item UPC matches the staple's preferred_upc, the first alternative UPC matches the searched product UPC, the product search is invoked exactly once, and the requested list name is passed through as "Weekly".
+    """
     staple = Staple(name="milk", term="milk", quantity=2, preferred_upc="000111")
 
     monkeypatch.setenv("KROGER_CLIENT_ID", "id")
@@ -121,6 +149,15 @@ def test_lists_items_propose_prefers_upc(monkeypatch, tmp_path):
     requested = {}
 
     def _get_staples(**kwargs):
+        """
+        Return a single staple and record the requested list name for tests.
+        
+        Parameters:
+            list_name (str | None): Optional list name to record in the shared `requested` dict.
+        
+        Returns:
+            list: A one-element list containing the test `staple` object.
+        """
         requested["list_name"] = kwargs.get("list_name")
         return [staple]
 
@@ -132,6 +169,17 @@ def test_lists_items_propose_prefers_upc(monkeypatch, tmp_path):
 
     class DummyProduct:
         def __init__(self, upc: str, description: str) -> None:
+            """
+            Initialize the product instance with a UPC and description.
+            
+            Parameters:
+                upc (str): The product's UPC code; used to build the internal `productId` and stored in the `items` list.
+                description (str): Human-readable product description.
+            
+            Notes:
+                - Sets `productId` to `f"id-{upc}"`.
+                - Initializes `items` as a list containing a single dict with the key `"upc"` and the provided UPC.
+            """
             self.productId = f"id-{upc}"
             self.description = description
             self.items = [{"upc": upc}]
@@ -141,15 +189,40 @@ def test_lists_items_propose_prefers_upc(monkeypatch, tmp_path):
 
     class DummyClient:
         def __init__(self, base_url: str) -> None:
+            """
+            Initialize the client with the base URL used for API requests.
+            
+            Parameters:
+                base_url (str): The base URL (including scheme and host) for the API endpoints this client will call.
+            """
             self.base_url = base_url
 
         def __enter__(self):
+            """
+            Enter the runtime context and provide the context manager instance.
+            
+            Returns:
+                self: The context manager instance to be used within the `with` block.
+            """
             return self
 
         def __exit__(self, exc_type, exc, tb):
+            """
+            Exit handler for the context manager that does not suppress exceptions.
+            
+            Called with the exception type, value, and traceback (or `None, None, None` if no exception occurred). This implementation does not suppress exceptions and returns `None`, allowing any raised exception to propagate.
+            """
             return None
 
         def products_search(self, *args, **kwargs):
+            """
+            Simulate a product search by recording the invocation and returning a dummy result set.
+            
+            Increments the shared `calls["search"]` counter to record that a search was performed.
+            
+            Returns:
+                DummyResults: A dummy search results container.
+            """
             calls["search"] += 1
             return DummyResults()
 
