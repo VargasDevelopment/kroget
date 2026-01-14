@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.2 (2026-01-13)
+
+### Fix
+
+- **tui.py**: changed staples verbiage to items in tui
+- remove unused openapi cli dev command and openapi specs
+
+### Refactor
+
+- **cli.py**: implemented lists-scoped items command; deprecated staples
+
 ## v0.2.1 (2026-01-13)
 
 ### Fix
