@@ -117,8 +117,9 @@ CLI examples
 kroget products search milk --location-id <LOCATION_ID>
 kroget lists list
 kroget lists set-active Staples
-kroget staples add "Milk" --term "milk" --qty 1
-kroget staples propose --location-id <LOCATION_ID> --out proposal.json
+kroget lists items list    # defaults to the active list
+kroget lists items add Staples "Milk" --term "milk" --qty 1
+kroget lists items propose Staples --location-id <LOCATION_ID> --out proposal.json
 kroget proposal apply proposal.json --apply
 ```
 
