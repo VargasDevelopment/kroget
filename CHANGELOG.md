@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.1 (2026-01-13)
+
+### Fix
+
+- **tui.py**: use alternative now works with row highlight
+- **tui.py**: instant load proposal, lazy load alternatives; rename pin for discovery
+- always populate alternatives even with pinned UPC
+
 ## v0.2.0 (2026-01-11)
 
 ### Feat
