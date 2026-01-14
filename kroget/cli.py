@@ -43,9 +43,12 @@ products_app = typer.Typer(help="Product search commands")
 auth_app = typer.Typer(help="Authentication commands")
 cart_app = typer.Typer(help="Cart commands")
 locations_app = typer.Typer(help="Location commands")
-staples_app = typer.Typer(help="Staples commands")
+staples_app = typer.Typer(
+    help="Deprecated (removed in v1.0.0); use `kroget lists items`"
+)
 proposal_app = typer.Typer(help="Proposal commands")
 lists_app = typer.Typer(help="List management commands")
+lists_items_app = typer.Typer(help="List item commands")
 sent_app = typer.Typer(help="Sent items history commands")
 
 app.add_typer(products_app, name="products")
@@ -57,10 +60,38 @@ app.add_typer(proposal_app, name="proposal")
 app.add_typer(lists_app, name="lists")
 app.add_typer(sent_app, name="sent")
 
+lists_app.add_typer(lists_items_app, name="items")
+
 console = Console()
 
 DEFAULT_REDIRECT_URI = "http://localhost:8400/callback"
 KROGER_PORTAL_URL = "https://developer.kroger.com/"
+
+
+def _warn_staples_deprecated() -> None:
+    typer.echo(
+        "kroget staples is deprecated and will be removed in v1.0.0; "
+        "use `kroget lists items ...`",
+        err=True,
+    )
+
+
+def _resolve_list_name(list_name: str | None) -> str:
+    return list_name or get_active_list()
+
+
+def _resolve_list_and_value(
+    list_name: str | None,
+    value: str | None,
+    *,
+    value_label: str,
+) -> tuple[str, str]:
+    if value is None:
+        if list_name is None:
+            console.print(f"[red]{value_label} required.[/red]")
+            raise typer.Exit(code=1)
+        return get_active_list(), list_name
+    return list_name or get_active_list(), value
 
 
 def _print_version(value: bool) -> None:
@@ -190,8 +221,11 @@ def _format_locations_table(locations):
     return table
 
 
-def _format_staples_table(staples: list[Staple]) -> Table:
-    table = Table(title="Staples")
+def _format_items_table(staples: list[Staple], list_name: str | None = None) -> Table:
+    title = "Items"
+    if list_name:
+        title = f"Items ({list_name})"
+    table = Table(title=title)
     table.add_column("Name", style="bold")
     table.add_column("Term")
     table.add_column("Qty")
@@ -499,99 +533,95 @@ def products_get(
         console.print("[yellow]No UPCs found in response.[/yellow]")
 
 
-@staples_app.command("add")
-def staples_add(
-    name: str = typer.Argument(..., help="Staple name"),
-    term: str = typer.Option(..., "--term", help="Search term"),
-    quantity: int = typer.Option(1, "--qty", min=1, help="Quantity"),
-    upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
-    modality: str = typer.Option("PICKUP", "--modality", help="PICKUP or DELIVERY"),
-    list_name: str | None = typer.Option(None, "--list", help="List name override"),
-) -> None:
-    """Add a staple item."""
-    modality = modality.upper()
-    if modality not in {"PICKUP", "DELIVERY"}:
+def _normalize_modality(modality: str) -> str:
+    normalized = modality.upper()
+    if normalized not in {"PICKUP", "DELIVERY"}:
         console.print("[red]Invalid modality.[/red] Use PICKUP or DELIVERY.")
         raise typer.Exit(code=1)
+    return normalized
+
+
+def _items_add(
+    *,
+    list_name: str,
+    name: str,
+    term: str,
+    quantity: int,
+    upc: str | None,
+    modality: str,
+    label: str,
+) -> None:
+    normalized_modality = _normalize_modality(modality)
     staple = Staple(
         name=name,
         term=term,
         quantity=quantity,
         preferred_upc=upc,
-        modality=modality,
+        modality=normalized_modality,
     )
     try:
         add_staple(staple, list_name=list_name)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
-    console.print(f"[green]Added staple:[/green] {name}")
+    console.print(f"[green]Added {label}:[/green] {name}")
 
 
-@staples_app.command("list")
-def staples_list(
-    as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
-    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+def _items_list(
+    *,
+    list_name: str,
+    as_json: bool,
+    json_key: str,
 ) -> None:
-    """List staples."""
     try:
         staples = get_staples(list_name=list_name)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
     if as_json:
-        payload = {"staples": [staple.to_dict() for staple in staples]}
+        payload = {json_key: [staple.to_dict() for staple in staples]}
         console.print_json(json.dumps(payload))
         return
-    table = _format_staples_table(staples)
+    table = _format_items_table(staples, list_name)
     console.print(table)
 
 
-@staples_app.command("remove")
-def staples_remove(
-    identifier: str = typer.Argument(..., help="Staple name or preferred UPC"),
-    list_name: str | None = typer.Option(None, "--list", help="List name override"),
-) -> None:
-    """Remove a staple."""
+def _items_remove(*, list_name: str, identifier: str, label: str) -> None:
     try:
         remove_staple(identifier, list_name=list_name)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
-    console.print(f"[green]Removed staple:[/green] {identifier}")
+    console.print(f"[green]Removed {label}:[/green] {identifier}")
 
 
-@staples_app.command("move")
-def staples_move(
-    identifier: str = typer.Argument(..., help="Staple name or preferred UPC"),
-    to_list: str = typer.Option(..., "--to", help="Target list name"),
-    from_list: str | None = typer.Option(None, "--from", help="Source list override"),
+def _items_move(
+    *,
+    source_list: str,
+    target_list: str,
+    identifier: str,
+    label: str,
 ) -> None:
-    """Move a staple to another list."""
-    source_list = from_list or get_active_list()
     try:
-        move_item(source_list, to_list, identifier)
+        move_item(source_list, target_list, identifier)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
-    console.print(f"[green]Moved staple to:[/green] {to_list}")
+    console.print(f"[green]Moved {label} to:[/green] {target_list}")
 
 
-@staples_app.command("set")
-def staples_set(
-    name: str = typer.Argument(..., help="Staple name"),
-    term: str | None = typer.Option(None, "--term", help="Search term"),
-    quantity: int | None = typer.Option(None, "--qty", min=1, help="Quantity"),
-    upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
-    modality: str | None = typer.Option(None, "--modality", help="PICKUP or DELIVERY"),
-    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+def _items_set(
+    *,
+    list_name: str,
+    name: str,
+    term: str | None,
+    quantity: int | None,
+    upc: str | None,
+    modality: str | None,
+    label: str,
 ) -> None:
-    """Update a staple."""
     if modality is not None:
-        modality = modality.upper()
-        if modality not in {"PICKUP", "DELIVERY"}:
-            console.print("[red]Invalid modality.[/red] Use PICKUP or DELIVERY.")
-            raise typer.Exit(code=1)
+        modality = _normalize_modality(modality)
     try:
         update_staple(
             name,
@@ -604,18 +634,19 @@ def staples_set(
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
-    console.print(f"[green]Updated staple:[/green] {name}")
+    console.print(f"[green]Updated {label}:[/green] {name}")
 
 
-@staples_app.command("propose")
-def staples_propose(
-    location_id: str | None = typer.Option(None, "--location-id", help="Location ID"),
-    out: Path = typer.Option(Path("proposal.json"), "--out", help="Output proposal path"),
-    as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
-    auto_pin: bool = typer.Option(False, "--auto-pin", help="Auto-pin UPCs"),
-    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+def _items_propose(
+    *,
+    list_name: str,
+    location_id: str | None,
+    out: Path,
+    as_json: bool,
+    auto_pin: bool,
+    empty_message: str,
+    item_label: str,
 ) -> None:
-    """Generate a proposal from staples."""
     config = _load_config()
     resolved_location_id = _resolve_location_id(location_id)
     if not resolved_location_id:
@@ -628,11 +659,11 @@ def staples_propose(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
     if not staples:
-        console.print("[yellow]No staples configured.[/yellow]")
+        console.print(f"[yellow]{empty_message}[/yellow]")
         raise typer.Exit(code=1)
 
     def confirm_pin(staple: Staple, upc: str) -> bool:
-        return typer.confirm(f"Pin UPC {upc} for staple '{staple.name}'?", default=False)
+        return typer.confirm(f"Pin UPC {upc} for {item_label} '{staple.name}'?", default=False)
 
     try:
         proposal, pinned = generate_proposal(
@@ -654,6 +685,246 @@ def staples_propose(
         table = _format_proposal_table(proposal.items, pinned)
         console.print(table)
         console.print(f"[green]Proposal saved:[/green] {out}")
+
+
+@lists_items_app.command("add")
+def lists_items_add(
+    list_name: str | None = typer.Argument(
+        None, help="List name (defaults to active list)"
+    ),
+    name: str | None = typer.Argument(None, help="Item name"),
+    term: str = typer.Option(..., "--term", help="Search term"),
+    quantity: int = typer.Option(1, "--qty", min=1, help="Quantity"),
+    upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
+    modality: str = typer.Option("PICKUP", "--modality", help="PICKUP or DELIVERY"),
+) -> None:
+    """Add an item to a list."""
+    list_name, name = _resolve_list_and_value(
+        list_name,
+        name,
+        value_label="Item name",
+    )
+    _items_add(
+        list_name=list_name,
+        name=name,
+        term=term,
+        quantity=quantity,
+        upc=upc,
+        modality=modality,
+        label="item",
+    )
+
+
+@lists_items_app.command("list")
+def lists_items_list(
+    list_name: str | None = typer.Argument(
+        None, help="List name (defaults to active list)"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
+) -> None:
+    """List items in a list."""
+    _items_list(
+        list_name=_resolve_list_name(list_name),
+        as_json=as_json,
+        json_key="items",
+    )
+
+
+@lists_items_app.command("remove")
+def lists_items_remove(
+    list_name: str | None = typer.Argument(
+        None, help="List name (defaults to active list)"
+    ),
+    identifier: str | None = typer.Argument(None, help="Item name or preferred UPC"),
+) -> None:
+    """Remove an item from a list."""
+    list_name, identifier = _resolve_list_and_value(
+        list_name,
+        identifier,
+        value_label="Item identifier",
+    )
+    _items_remove(list_name=list_name, identifier=identifier, label="item")
+
+
+@lists_items_app.command("move")
+def lists_items_move(
+    list_name: str | None = typer.Argument(
+        None, help="Source list name (defaults to active list)"
+    ),
+    identifier: str | None = typer.Argument(None, help="Item name or preferred UPC"),
+    to_list: str = typer.Option(..., "--to", help="Target list name"),
+) -> None:
+    """Move an item to another list."""
+    list_name, identifier = _resolve_list_and_value(
+        list_name,
+        identifier,
+        value_label="Item identifier",
+    )
+    _items_move(
+        source_list=list_name,
+        target_list=to_list,
+        identifier=identifier,
+        label="item",
+    )
+
+
+@lists_items_app.command("set")
+def lists_items_set(
+    list_name: str | None = typer.Argument(
+        None, help="List name (defaults to active list)"
+    ),
+    name: str | None = typer.Argument(None, help="Item name"),
+    term: str | None = typer.Option(None, "--term", help="Search term"),
+    quantity: int | None = typer.Option(None, "--qty", min=1, help="Quantity"),
+    upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
+    modality: str | None = typer.Option(None, "--modality", help="PICKUP or DELIVERY"),
+) -> None:
+    """Update an item in a list."""
+    list_name, name = _resolve_list_and_value(
+        list_name,
+        name,
+        value_label="Item name",
+    )
+    _items_set(
+        list_name=list_name,
+        name=name,
+        term=term,
+        quantity=quantity,
+        upc=upc,
+        modality=modality,
+        label="item",
+    )
+
+
+@lists_items_app.command("propose")
+def lists_items_propose(
+    list_name: str | None = typer.Argument(
+        None, help="List name (defaults to active list)"
+    ),
+    location_id: str | None = typer.Option(None, "--location-id", help="Location ID"),
+    out: Path = typer.Option(Path("proposal.json"), "--out", help="Output proposal path"),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    auto_pin: bool = typer.Option(False, "--auto-pin", help="Auto-pin UPCs"),
+) -> None:
+    """Generate a proposal from a list."""
+    _items_propose(
+        list_name=_resolve_list_name(list_name),
+        location_id=location_id,
+        out=out,
+        as_json=as_json,
+        auto_pin=auto_pin,
+        empty_message="No items configured.",
+        item_label="item",
+    )
+
+
+@staples_app.command("add")
+def staples_add(
+    name: str = typer.Argument(..., help="Staple name"),
+    term: str = typer.Option(..., "--term", help="Search term"),
+    quantity: int = typer.Option(1, "--qty", min=1, help="Quantity"),
+    upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
+    modality: str = typer.Option("PICKUP", "--modality", help="PICKUP or DELIVERY"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+) -> None:
+    """Add a staple item."""
+    _warn_staples_deprecated()
+    _items_add(
+        list_name=list_name or get_active_list(),
+        name=name,
+        term=term,
+        quantity=quantity,
+        upc=upc,
+        modality=modality,
+        label="staple",
+    )
+
+
+@staples_app.command("list")
+def staples_list(
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+) -> None:
+    """List staples."""
+    _warn_staples_deprecated()
+    _items_list(
+        list_name=list_name or get_active_list(),
+        as_json=as_json,
+        json_key="staples",
+    )
+
+
+@staples_app.command("remove")
+def staples_remove(
+    identifier: str = typer.Argument(..., help="Staple name or preferred UPC"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+) -> None:
+    """Remove a staple."""
+    _warn_staples_deprecated()
+    _items_remove(
+        list_name=list_name or get_active_list(),
+        identifier=identifier,
+        label="staple",
+    )
+
+
+@staples_app.command("move")
+def staples_move(
+    identifier: str = typer.Argument(..., help="Staple name or preferred UPC"),
+    to_list: str = typer.Option(..., "--to", help="Target list name"),
+    from_list: str | None = typer.Option(None, "--from", help="Source list override"),
+) -> None:
+    """Move a staple to another list."""
+    _warn_staples_deprecated()
+    _items_move(
+        source_list=from_list or get_active_list(),
+        target_list=to_list,
+        identifier=identifier,
+        label="staple",
+    )
+
+
+@staples_app.command("set")
+def staples_set(
+    name: str = typer.Argument(..., help="Staple name"),
+    term: str | None = typer.Option(None, "--term", help="Search term"),
+    quantity: int | None = typer.Option(None, "--qty", min=1, help="Quantity"),
+    upc: str | None = typer.Option(None, "--upc", help="Preferred UPC"),
+    modality: str | None = typer.Option(None, "--modality", help="PICKUP or DELIVERY"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+) -> None:
+    """Update a staple."""
+    _warn_staples_deprecated()
+    _items_set(
+        list_name=list_name or get_active_list(),
+        name=name,
+        term=term,
+        quantity=quantity,
+        upc=upc,
+        modality=modality,
+        label="staple",
+    )
+
+
+@staples_app.command("propose")
+def staples_propose(
+    location_id: str | None = typer.Option(None, "--location-id", help="Location ID"),
+    out: Path = typer.Option(Path("proposal.json"), "--out", help="Output proposal path"),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    auto_pin: bool = typer.Option(False, "--auto-pin", help="Auto-pin UPCs"),
+    list_name: str | None = typer.Option(None, "--list", help="List name override"),
+) -> None:
+    """Generate a proposal from staples."""
+    _warn_staples_deprecated()
+    _items_propose(
+        list_name=list_name or get_active_list(),
+        location_id=location_id,
+        out=out,
+        as_json=as_json,
+        auto_pin=auto_pin,
+        empty_message="No staples configured.",
+        item_label="staple",
+    )
 
 
 @locations_app.command("search")

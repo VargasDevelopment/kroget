@@ -43,6 +43,13 @@ def _dummy_token():
     )
 
 
+def _load_json_from_output(output: str) -> dict:
+    start = output.find("{")
+    if start == -1:
+        raise AssertionError("No JSON payload found in output")
+    return json.loads(output[start:])
+
+
 def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
     staple = Staple(name="milk", term="milk", quantity=2, preferred_upc="000111")
 
@@ -97,10 +104,78 @@ def test_staples_propose_prefers_upc(monkeypatch, tmp_path):
         ],
     )
     assert result.exit_code == 0
+    payload = _load_json_from_output(result.output)
+    assert payload["items"][0]["upc"] == "000111"
+    assert payload["items"][0]["alternatives"][0]["upc"] == "000222"
+    assert calls["search"] == 1
+
+
+def test_lists_items_propose_prefers_upc(monkeypatch, tmp_path):
+    staple = Staple(name="milk", term="milk", quantity=2, preferred_upc="000111")
+
+    monkeypatch.setenv("KROGER_CLIENT_ID", "id")
+    monkeypatch.setenv("KROGER_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("KROGER_BASE_URL", "https://api.kroger.com")
+
+    calls = {"search": 0}
+    requested = {}
+
+    def _get_staples(**kwargs):
+        requested["list_name"] = kwargs.get("list_name")
+        return [staple]
+
+    monkeypatch.setattr("kroget.cli.get_staples", _get_staples)
+    monkeypatch.setattr(
+        "kroget.core.proposal.auth.get_client_credentials_token",
+        lambda **_: _dummy_token(),
+    )
+
+    class DummyProduct:
+        def __init__(self, upc: str, description: str) -> None:
+            self.productId = f"id-{upc}"
+            self.description = description
+            self.items = [{"upc": upc}]
+
+    class DummyResults:
+        data = [DummyProduct("000222", "Alt Milk")]
+
+    class DummyClient:
+        def __init__(self, base_url: str) -> None:
+            self.base_url = base_url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def products_search(self, *args, **kwargs):
+            calls["search"] += 1
+            return DummyResults()
+
+    monkeypatch.setattr("kroget.core.proposal.KrogerClient", DummyClient)
+
+    out_path = tmp_path / "proposal.json"
+    result = CliRunner().invoke(
+        app,
+        [
+            "lists",
+            "items",
+            "propose",
+            "Weekly",
+            "--location-id",
+            "01400441",
+            "--out",
+            str(out_path),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["items"][0]["upc"] == "000111"
     assert payload["items"][0]["alternatives"][0]["upc"] == "000222"
     assert calls["search"] == 1
+    assert requested["list_name"] == "Weekly"
 
 
 def test_staples_propose_searches(monkeypatch, tmp_path):
