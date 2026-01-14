@@ -77,7 +77,7 @@ Versions are derived from git tags via setuptools-scm.
 
 1. Ensure commits follow the Commitizen prompts.
 2. Run `cz bump` to update `CHANGELOG.md` and create the tag.
-3. Push with `git push --follow-tags`, then `git push`.
+3. Push with `git push --tags`, then `git push`.
 
 Publishing to PyPI is handled from tags.
 
