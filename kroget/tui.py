@@ -160,7 +160,7 @@ class StapleScreen(ModalScreen[tuple[str, int] | None]):
         self._ready = False
 
     def compose(self) -> ComposeResult:
-        yield Static("Save as staple", id="confirm_message")
+        yield Static("Save item to list", id="confirm_message")
         yield Input(value=self.default_name, id="staple_name")
         yield Input(value=self.default_term, id="staple_term")
         yield Input(value=str(self.default_quantity), id="staple_quantity")
@@ -553,7 +553,7 @@ class KrogetApp(App):
         ("d", "delete", "Remove"),
         ("m", "move", "Move"),
         ("a", "apply", "Apply"),
-        ("s", "save_staple", "Save staple"),
+        ("s", "save_staple", "Save item"),
         ("l", "lists", "Lists"),
         ("c", "clear_proposal", "Clear"),
         ("o", "open_cart", "Open cart"),
@@ -1599,7 +1599,7 @@ class KrogetApp(App):
 
     def _handle_save_staple(self, result, upc: str) -> None:
         if result is None:
-            self._set_status("Save staple canceled.")
+            self._set_status("Save item canceled.")
             return
         name, term, quantity, modality = result
         exists = any(staple.name == name for staple in self.staples)
@@ -1627,7 +1627,7 @@ class KrogetApp(App):
         upc: str,
     ) -> None:
         if not confirmed:
-            self._set_status("Save staple canceled.")
+            self._set_status("Save item canceled.")
             return
         self._save_staple_record(name, term, quantity, modality, upc, overwrite=True)
 
@@ -1640,7 +1640,7 @@ class KrogetApp(App):
         upc: str,
         overwrite: bool,
     ) -> None:
-        self._set_status("Saving staple...")
+        self._set_status("Saving item...")
         self.run_worker(
             lambda: self._save_staple_worker(name, term, quantity, modality, upc, overwrite),
             group="staple-save",
@@ -1680,7 +1680,7 @@ class KrogetApp(App):
                     list_name=self.active_list,
                 )
             record_recent_search(term=term, upc=upc, description=name)
-            self.call_from_thread(self._set_status, f"Saved staple '{name}'.")
+            self.call_from_thread(self._set_status, f"Saved item '{name}'.")
             self.call_from_thread(self.refresh_data)
             self.call_from_thread(
                 lambda: self.push_screen(
