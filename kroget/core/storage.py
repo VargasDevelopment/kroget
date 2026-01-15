@@ -14,6 +14,14 @@ class ConfigError(RuntimeError):
     pass
 
 
+def _load_json_file(path: Path) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        setattr(exc, "path", path)
+        raise
+
+
 @dataclass(frozen=True)
 class KrogerConfig:
     client_id: str
@@ -85,7 +93,7 @@ class TokenStore:
     def load(self) -> StoredToken | None:
         if not self.path.exists():
             return None
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = _load_json_file(self.path)
         return StoredToken.model_validate(data)
 
     def save(self, token: StoredToken) -> None:
@@ -136,7 +144,7 @@ class ConfigStore:
     def load(self) -> UserConfig:
         if not self.path.exists():
             return UserConfig()
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = _load_json_file(self.path)
         if not isinstance(data, dict):
             return UserConfig()
         return UserConfig.from_dict(data)
@@ -184,7 +192,7 @@ class StaplesStore:
     def load(self) -> list[Staple]:
         if not self.path.exists():
             return []
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = _load_json_file(self.path)
         if not isinstance(data, dict):
             return []
         staples = data.get("staples", [])
@@ -245,7 +253,7 @@ def _load_lists_data(
     lists_path = lists_path or _default_lists_path()
     staples_path = staples_path or _default_staples_path()
     _ensure_lists_data(lists_path, staples_path)
-    data = json.loads(lists_path.read_text(encoding="utf-8"))
+    data = _load_json_file(lists_path)
     if not isinstance(data, dict):
         raise ValueError("Invalid lists.json format")
     active = str(data.get("active", "Staples"))
