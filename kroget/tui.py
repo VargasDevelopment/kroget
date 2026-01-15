@@ -344,6 +344,8 @@ class ListManagerScreen(ModalScreen[None]):
         for index, name in enumerate(names):
             marker = "●" if name == active else ""
             table.add_row(marker, name, key=str(index))
+        if active in names:
+            table.move_cursor(row=names.index(active), column=0)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         return
