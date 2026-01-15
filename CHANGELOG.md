@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.3 (2026-01-14)
+
+### Fix
+
+- **tui.py**: auto-highlight active list in lists view
+- prevent apply with empty proposals and show friendly errors
+
 ## v0.2.2 (2026-01-13)
 
 ### Fix
