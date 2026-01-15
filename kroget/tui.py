@@ -1160,7 +1160,7 @@ class KrogetApp(App):
         if self.active_view != "planner":
             self._set_status("Switch to Planner to apply proposal.", error=True)
             return
-        if not self.proposal:
+        if not self.proposal or not self.proposal.items:
             self._set_status("No proposal to apply.", error=True)
             return
         self.push_screen(ConfirmScreen("Apply proposal to cart?"), self._handle_confirm)
@@ -1225,6 +1225,9 @@ class KrogetApp(App):
         )
 
     def _apply_proposal(self) -> None:
+        if not self.proposal or not self.proposal.items:
+            self.call_from_thread(self._set_status, "No proposal to apply.", error=True)
+            return
         try:
             token = auth.load_user_token(self.config)
         except auth.KrogerAuthError as exc:

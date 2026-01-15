@@ -8,10 +8,13 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
 import typer
 from dotenv import load_dotenv
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
+from typer.core import TyperGroup
 
 from kroget.core.product_upc import extract_upcs, pick_upc
 from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
@@ -38,7 +41,140 @@ from kroget.core.storage import (
 from kroget.kroger import auth
 from kroget.kroger.client import KrogerAPIError, KrogerClient
 
-app = typer.Typer(help="Kroger shopping CLI")
+console = Console()
+
+
+def _format_validation_fields(exc: ValidationError, limit: int = 2) -> list[str]:
+    fields: list[str] = []
+    for error in exc.errors():
+        loc = error.get("loc")
+        if not loc:
+            continue
+        field = ".".join(str(part) for part in loc if part is not None)
+        if field and field not in fields:
+            fields.append(field)
+        if len(fields) >= limit:
+            break
+    return fields
+
+
+def _format_path(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        return str(value)
+    return str(value)
+
+
+def _tip_for_path(path: str | None) -> str | None:
+    if not path:
+        return "Check the path and try again."
+    lowered = path.lower()
+    if "proposal" in lowered:
+        return "Generate it with `kroget proposal ...` or the TUI."
+    return "Check the path and try again."
+
+
+def _emit_cli_error(message: str, *, tip: str | None = None, detail: str | None = None) -> None:
+    console.print(f"[red]{message}[/red]")
+    if detail:
+        console.print(f"[yellow]{detail}[/yellow]")
+    if tip:
+        console.print(f"[yellow]Tip:[/yellow] {tip}")
+
+
+def _handle_cli_exception(exc: Exception) -> None:
+    if isinstance(exc, FileNotFoundError):
+        path = _format_path(getattr(exc, "filename", None))
+        _emit_cli_error(
+            f"File not found: {path or 'unknown'}",
+            tip=_tip_for_path(path),
+        )
+        return
+    if isinstance(exc, (IsADirectoryError, NotADirectoryError)):
+        path = _format_path(getattr(exc, "filename", None))
+        _emit_cli_error(
+            f"Invalid path: {path or 'unknown'}",
+            tip="Check the path and try again.",
+        )
+        return
+    if isinstance(exc, json.JSONDecodeError):
+        path = _format_path(getattr(exc, "path", None))
+        tip = "Delete and regenerate this file."
+        if path and "proposal" in path.lower():
+            tip = "Regenerate proposal using `kroget proposal ...` or the TUI."
+        _emit_cli_error(
+            f"Invalid JSON in {path or 'file'}",
+            tip=tip,
+        )
+        return
+    if isinstance(exc, ValidationError):
+        path = _format_path(getattr(exc, "path", None))
+        fields = _format_validation_fields(exc)
+        detail = f"Fields: {', '.join(fields)}" if fields else None
+        tip = "Check the input and try again."
+        message = f"Invalid data format in {path or 'input'}"
+        if path and "proposal" in path.lower():
+            message = f"Invalid proposal format in {path}"
+            tip = "Regenerate proposal using `kroget proposal ...` or the TUI."
+        _emit_cli_error(
+            message,
+            tip=tip,
+            detail=detail,
+        )
+        return
+    if isinstance(exc, KrogerAPIError):
+        if exc.status_code in {401, 403}:
+            _emit_cli_error(
+                "Not authenticated or token expired.",
+                tip="Run `kroget auth login`.",
+            )
+            return
+        _emit_cli_error(
+            f"Network/API error: {exc}",
+            tip="Run `kroget doctor` to validate connectivity/auth.",
+        )
+        return
+    if isinstance(exc, auth.KrogerAuthError):
+        message = str(exc)
+        if "401" in message or "403" in message:
+            _emit_cli_error(
+                "Not authenticated or token expired.",
+                tip="Run `kroget auth login`.",
+            )
+            return
+        _emit_cli_error(
+            f"Network/API error: {exc}",
+            tip="Run `kroget doctor` to validate connectivity/auth.",
+        )
+        return
+    if isinstance(exc, httpx.RequestError):
+        _emit_cli_error(
+            f"Network/API error: {exc}",
+            tip="Run `kroget doctor` to validate connectivity/auth.",
+        )
+        return
+    _emit_cli_error(
+        f"Unexpected error: {exc.__class__.__name__}",
+        tip="Please open an issue and include the command you ran.",
+    )
+
+
+class SafeTyperGroup(TyperGroup):
+    def main(self, *args, **kwargs):  # type: ignore[override]
+        try:
+            return super().main(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            _handle_cli_exception(exc)
+            raise SystemExit(1) from exc
+
+
+app = typer.Typer(
+    help="Kroger shopping CLI",
+    cls=SafeTyperGroup,
+    pretty_exceptions_enable=False,
+    pretty_exceptions_show_locals=False,
+)
 products_app = typer.Typer(help="Product search commands")
 auth_app = typer.Typer(help="Authentication commands")
 cart_app = typer.Typer(help="Cart commands")
@@ -61,8 +197,6 @@ app.add_typer(lists_app, name="lists")
 app.add_typer(sent_app, name="sent")
 
 lists_app.add_typer(lists_items_app, name="items")
-
-console = Console()
 
 DEFAULT_REDIRECT_URI = "http://localhost:8400/callback"
 KROGER_PORTAL_URL = "https://developer.kroger.com/"
@@ -1442,6 +1576,10 @@ def proposal_apply(
     """Apply a proposal by adding items to cart."""
     config = _load_config()
     proposal = Proposal.load(proposal_path)
+
+    if apply and not proposal.items:
+        console.print("[yellow]No proposal to apply.[/yellow]")
+        raise typer.Exit(code=1)
 
     try:
         token = auth.load_user_token(config, TokenStore())

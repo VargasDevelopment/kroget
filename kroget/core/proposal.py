@@ -7,7 +7,7 @@ from typing import Callable
 
 from dataclasses import dataclass
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from kroget.core.product_upc import extract_upcs
 from kroget.core.storage import Staple, update_staple
@@ -41,8 +41,16 @@ class Proposal(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> "Proposal":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return cls.model_validate(payload)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            setattr(exc, "path", path)
+            raise
+        try:
+            return cls.model_validate(payload)
+        except ValidationError as exc:
+            setattr(exc, "path", path)
+            raise
 
     def save(self, path: Path) -> None:
         path.write_text(json.dumps(self.model_dump(), indent=2), encoding="utf-8")
