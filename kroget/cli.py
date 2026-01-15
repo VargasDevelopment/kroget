@@ -1443,6 +1443,10 @@ def proposal_apply(
     config = _load_config()
     proposal = Proposal.load(proposal_path)
 
+    if apply and not proposal.items:
+        console.print("[yellow]No proposal to apply.[/yellow]")
+        raise typer.Exit(code=1)
+
     try:
         token = auth.load_user_token(config, TokenStore())
     except auth.KrogerAuthError as exc:
