@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.0 (2026-01-15)
+
+### Feat
+
+- **tui.py**: show list item preview in lists view
+
+### Fix
+
+- **storage**: isolate test data dir and prevent sent history pollution
+
 ## v0.2.3 (2026-01-14)
 
 ### Fix
