@@ -321,9 +321,19 @@ class ListManagerScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield Static("Manage Lists", id="confirm_message")
-        table = DataTable(id="list_table")
-        table.add_columns("Active", "Name")
-        yield table
+        with Horizontal(id="list_manager_tables"):
+            with Vertical(id="list_panel"):
+                yield Static("Lists")
+                table = DataTable(id="list_table")
+                table.add_columns("Active", "Name")
+                table.cursor_type = "row"
+                yield table
+            with Vertical(id="list_preview_panel"):
+                yield Static("Items Preview", id="list_preview_title")
+                preview = DataTable(id="list_preview")
+                preview.add_columns("Name", "Term", "Qty", "UPC", "Modality")
+                preview.cursor_type = "row"
+                yield preview
         with Horizontal(id="confirm_buttons"):
             yield Button("Set Active", id="list_set", variant="success")
             yield Button("Add to Proposal", id="list_add", variant="primary")
@@ -336,19 +346,52 @@ class ListManagerScreen(ModalScreen[None]):
         self._refresh()
         self.query_one("#list_table", DataTable).focus()
 
+    def _update_preview(self, list_name: str | None) -> None:
+        table = self.query_one("#list_preview", DataTable)
+        title = self.query_one("#list_preview_title", Static)
+        table.clear()
+        if not list_name:
+            title.update("Items Preview")
+            table.add_row("No lists available.", "", "", "", "")
+            return
+        title.update(f"Items: {list_name}")
+        try:
+            staples = get_staples(list_name=list_name)
+        except ValueError:
+            table.add_row("No lists available.", "", "", "", "")
+            return
+        if not staples:
+            table.add_row("No items in this list.", "", "", "", "")
+            return
+        for staple in staples:
+            table.add_row(
+                staple.name,
+                staple.term,
+                str(staple.quantity),
+                staple.preferred_upc or "",
+                staple.modality,
+            )
+
     def _refresh(self) -> None:
         table = self.query_one("#list_table", DataTable)
         table.clear()
         names = list_names()
         active = get_active_list()
+        if not names:
+            table.add_row("", "No lists available.")
+            self._update_preview(None)
+            return
         for index, name in enumerate(names):
             marker = "●" if name == active else ""
             table.add_row(marker, name, key=str(index))
         if active in names:
             table.move_cursor(row=names.index(active), column=0)
+        self._update_preview(self._selected_name())
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        return
+        if event.data_table.id != "list_table":
+            return
+        self._update_preview(self._selected_name())
 
     def _selected_name(self) -> str | None:
         names = list_names()
@@ -534,6 +577,14 @@ class KrogetApp(App):
 
     DataTable {
         height: 1fr;
+    }
+
+    #list_manager_tables {
+        height: 1fr;
+    }
+
+    #list_panel, #list_preview_panel {
+        width: 1fr;
     }
 
     #confirm_message {
