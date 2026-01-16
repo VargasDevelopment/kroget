@@ -358,6 +358,7 @@ class ListManagerScreen(ModalScreen[None]):
         try:
             staples = get_staples(list_name=list_name)
         except ValueError:
+            title.update("Items Preview")
             table.add_row("No lists available.", "", "", "", "")
             return
         if not staples:
