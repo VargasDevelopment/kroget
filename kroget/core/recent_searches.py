@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from kroget.core.paths import data_dir
+
 
 @dataclass
 class RecentSearchEntry:
@@ -33,7 +35,7 @@ class RecentSearchEntry:
 
 class RecentSearchStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or (Path.home() / ".kroget" / "recent_searches.json")
+        self.path = path or (data_dir() / "recent_searches.json")
 
     def load(self) -> list[RecentSearchEntry]:
         if not self.path.exists():

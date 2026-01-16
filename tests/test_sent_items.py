@@ -1,5 +1,7 @@
 import json
+from pathlib import Path
 
+from kroget.core.paths import data_dir
 from kroget.core.proposal import ApplyItemResult, ProposalItem
 from kroget.core.sent_items import (
     SentItem,
@@ -153,3 +155,38 @@ def test_session_from_apply_results():
     assert session.session_id == "session-1"
     assert session.items[0].status == "success"
     assert session.kind == "apply"
+
+
+def test_sent_items_respects_data_dir_override(tmp_path, monkeypatch):
+    data_root = tmp_path / "kroget-data"
+    fake_home = tmp_path / "home"
+    monkeypatch.setenv("KROGET_DATA_DIR", str(data_root))
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    session = SentSession(
+        session_id="override",
+        started_at="2024-01-01T00:00:00Z",
+        finished_at="2024-01-01T00:01:00Z",
+        location_id="01400441",
+        sources=["Staples"],
+        items=[
+            SentItem(
+                name="Milk",
+                upc="000111",
+                quantity=1,
+                modality="PICKUP",
+                status="success",
+            )
+        ],
+        kind="apply",
+    )
+    record_sent_session(session)
+
+    expected_path = data_dir() / "sent_items.json"
+    assert expected_path == data_root / "sent_items.json"
+    assert expected_path.exists()
+    payload = json.loads(expected_path.read_text())
+    assert payload["sessions"][0]["session_id"] == "override"
+
+    default_path = Path(fake_home) / ".kroget" / "sent_items.json"
+    assert not default_path.exists()

@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from kroget.core.paths import data_dir
+
 
 @dataclass
 class SentItem:
@@ -81,7 +83,7 @@ class SentSession:
 
 class SentItemsStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or (Path.home() / ".kroget" / "sent_items.json")
+        self.path = path or (data_dir() / "sent_items.json")
 
     def _ensure_empty_file(self) -> None:
         payload = {"sessions": []}

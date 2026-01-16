@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from kroget.kroger.models import StoredToken
+from kroget.core.paths import data_dir
 
 
 class ConfigError(RuntimeError):
@@ -88,7 +89,7 @@ def load_kroger_config(store: "ConfigStore | None" = None) -> KrogerConfig:
 
 class TokenStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or (Path.home() / ".kroget" / "tokens.json")
+        self.path = path or (data_dir() / "tokens.json")
 
     def load(self) -> StoredToken | None:
         if not self.path.exists():
@@ -139,7 +140,7 @@ class UserConfig:
 
 class ConfigStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or (Path.home() / ".kroget" / "config.json")
+        self.path = path or (data_dir() / "config.json")
 
     def load(self) -> UserConfig:
         if not self.path.exists():
@@ -187,7 +188,7 @@ class Staple:
 
 class StaplesStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or (Path.home() / ".kroget" / "staples.json")
+        self.path = path or (data_dir() / "staples.json")
 
     def load(self) -> list[Staple]:
         if not self.path.exists():
@@ -210,11 +211,11 @@ class StaplesStore:
 
 
 def _default_lists_path() -> Path:
-    return Path.home() / ".kroget" / "lists.json"
+    return data_dir() / "lists.json"
 
 
 def _default_staples_path() -> Path:
-    return Path.home() / ".kroget" / "staples.json"
+    return data_dir() / "staples.json"
 
 
 def _validate_list_name(name: str) -> str:
