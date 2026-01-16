@@ -18,6 +18,7 @@ from typer.core import TyperGroup
 
 from kroget.core.product_upc import extract_upcs, pick_upc
 from kroget.core.proposal import Proposal, ProposalItem, apply_proposal_items, generate_proposal
+from kroget.core.paths import data_dir
 from kroget.core.sent_items import load_sent_sessions, record_sent_session, session_from_apply_results
 from kroget.core.storage import (
     ConfigError,
@@ -588,7 +589,7 @@ def setup(
             config.default_modality = value
 
     store.save(config)
-    console.print("[green]Saved config:[/green] ~/.kroget/config.json")
+    console.print(f"[green]Saved config:[/green] {data_dir() / 'config.json'}")
 
     try:
         validated = load_kroger_config(store=store)
