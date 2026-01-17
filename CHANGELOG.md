@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.0 (2026-01-17)
+
+### Feat
+
+- add cli flag to load an existing proposal.json into the tui
+
+### Fix
+
+- **tui.py**: keep proposal ui state in sync with in-memory proposal
+
 ## v0.3.0 (2026-01-15)
 
 ### Feat
