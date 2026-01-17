@@ -819,6 +819,13 @@ class KrogetApp(App):
         self._update_proposal_status()
         if selected_item_id is not None:
             self._restore_proposal_selection(selected_item_id)
+        if not self.proposal or not self.proposal.items:
+            self.selection.proposal_index = None
+        elif (
+            self.selection.proposal_index is not None
+            and self.selection.proposal_index >= len(self.proposal.items)
+        ):
+            self.selection.proposal_index = None
         self._update_alternatives()
 
     def _populate_tables(self) -> None:
