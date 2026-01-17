@@ -37,6 +37,9 @@ dev = [
 [project.scripts]
 kroget = "kroget.cli:app"
 
+[project.urls]
+Repository = "https://github.com/VargasDevelopment/kroget"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["kroget*"]
