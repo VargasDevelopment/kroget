@@ -618,7 +618,12 @@ class KrogetApp(App):
 
     TITLE = "Kro-Get"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        initial_proposal: Proposal | None = None,
+        startup_message: str | None = None,
+    ) -> None:
         super().__init__()
         self.config = load_kroger_config()
         self.user_config = ConfigStore().load()
@@ -626,7 +631,9 @@ class KrogetApp(App):
         self.default_modality = _normalize_modality(self.user_config.default_modality)
         self.active_list = get_active_list()
         self.staples: list[Staple] = []
-        self.proposal: Proposal | None = None
+        self.proposal: Proposal | None = initial_proposal
+        if not self.location_id and initial_proposal and initial_proposal.location_id:
+            self.location_id = initial_proposal.location_id
         self.pinned: dict[str, bool] = {}
         self.search_results: list = []
         self.search_term = ""
@@ -639,6 +646,7 @@ class KrogetApp(App):
         self.selection = SelectionState()
         self.alternatives_state: dict[int, AlternativesState] = {}
         self.proposal_terms: dict[tuple[str, str], str] = {}
+        self.startup_message = startup_message
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -677,6 +685,9 @@ class KrogetApp(App):
         self._setup_tables()
         self._update_header()
         self.refresh_data()
+        if self.startup_message:
+            self._set_status(self.startup_message)
+            self.set_timer(3, self._set_mode_status)
 
     def _setup_tables(self) -> None:
         staples_table = self.query_one("#staples", DataTable)
@@ -718,6 +729,12 @@ class KrogetApp(App):
         if error:
             status.add_class("error")
 
+    def _set_mode_status(self) -> None:
+        if not self.location_id:
+            self._set_status("Default location is not set.", error=True)
+        else:
+            self._set_status("Mode: Dry-run (press 'a' to apply)")
+
     def _update_header(self) -> None:
         auth_status = "logged in" if TokenStore().load() else "not logged in"
         location = self.location_id or "none"
@@ -740,10 +757,7 @@ class KrogetApp(App):
                 items=[],
                 sources=[],
             )
-        if not self.location_id:
-            self._set_status("Default location is not set.", error=True)
-        else:
-            self._set_status("Mode: Dry-run (press 'a' to apply)")
+        self._set_mode_status()
         self._populate_tables()
         self._update_proposal_status()
 
@@ -1811,5 +1825,9 @@ class KrogetApp(App):
             event.stop()
 
 
-def run_tui() -> None:
-    KrogetApp().run()
+def run_tui(
+    *,
+    initial_proposal: Proposal | None = None,
+    startup_message: str | None = None,
+) -> None:
+    KrogetApp(initial_proposal=initial_proposal, startup_message=startup_message).run()
