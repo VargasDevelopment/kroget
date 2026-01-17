@@ -66,3 +66,42 @@ def test_lists_list_invalid_json_is_friendly(monkeypatch, tmp_path):
     assert "Invalid JSON in" in result.output
     assert "lists.json" in result.output
     assert "Traceback (most recent call last)" not in result.output
+
+
+def test_tui_load_missing_file_is_friendly(tmp_path):
+    runner = CliRunner()
+    missing = tmp_path / "proposal.json"
+
+    result = runner.invoke(app, ["tui", "--load", str(missing)])
+
+    assert result.exit_code != 0
+    assert "File not found" in result.output
+    assert "proposal.json" in result.output
+    assert "Traceback (most recent call last)" not in result.output
+
+
+def test_tui_load_invalid_json_is_friendly(tmp_path):
+    runner = CliRunner()
+    proposal_path = tmp_path / "proposal.json"
+    proposal_path.write_text("{invalid", encoding="utf-8")
+
+    result = runner.invoke(app, ["tui", "--load", str(proposal_path)])
+
+    assert result.exit_code != 0
+    assert "Invalid JSON in" in result.output
+    assert "proposal.json" in result.output
+    assert "Traceback (most recent call last)" not in result.output
+
+
+def test_tui_load_invalid_format_is_friendly(tmp_path):
+    runner = CliRunner()
+    proposal_path = tmp_path / "proposal.json"
+    proposal_path.write_text('{"version": "1"}', encoding="utf-8")
+
+    result = runner.invoke(app, ["tui", "--load", str(proposal_path)])
+
+    assert result.exit_code != 0
+    assert "Invalid proposal format in" in result.output
+    assert "proposal.json" in result.output
+    assert "validation error" not in result.output.lower()
+    assert "Traceback (most recent call last)" not in result.output

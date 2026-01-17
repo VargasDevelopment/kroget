@@ -1843,11 +1843,24 @@ def version() -> None:
 
 
 @app.command()
-def tui() -> None:
+def tui(
+    load: Path | None = typer.Option(
+        None,
+        "--load",
+        help="Load a proposal JSON file before starting the TUI",
+    ),
+) -> None:
     """Launch the Textual TUI."""
     from kroget.tui import run_tui
 
-    run_tui()
+    proposal: Proposal | None = None
+    startup_message: str | None = None
+    if load is not None:
+        proposal_path = load.expanduser()
+        proposal = Proposal.load(proposal_path)
+        startup_message = f"Loaded proposal: {proposal_path} ({len(proposal.items)} items)"
+
+    run_tui(initial_proposal=proposal, startup_message=startup_message)
 
 
 if __name__ == "__main__":
