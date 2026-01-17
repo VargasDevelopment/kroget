@@ -73,6 +73,13 @@ def _apply_alternatives_to_item(
     return False
 
 
+def _proposal_status_text(proposal: Proposal | None) -> str:
+    if not proposal:
+        return "Proposal: 0 items"
+    sources = ", ".join(proposal.sources) if proposal.sources else "None"
+    return f"Proposal: {len(proposal.items)} items | Sources: {sources}"
+
+
 class ConfirmScreen(ModalScreen[bool]):
     def __init__(self, message: str, yes_label: str = "Apply", no_label: str = "Cancel") -> None:
         super().__init__()
@@ -758,8 +765,7 @@ class KrogetApp(App):
                 sources=[],
             )
         self._set_mode_status()
-        self._populate_tables()
-        self._update_proposal_status()
+        self._refresh_proposal_ui()
 
     def on_list_changed(self) -> None:
         self._update_header()
@@ -805,9 +811,15 @@ class KrogetApp(App):
         sources.add(list_name)
         self.proposal.sources = sorted(sources)
         self.alternatives_state = {}
+        self._refresh_proposal_ui()
+        self._set_status(f"Added list {list_name} (+{added} items, {merged} merged).")
+
+    def _refresh_proposal_ui(self, selected_item_id: int | None = None) -> None:
         self._populate_tables()
         self._update_proposal_status()
-        self._set_status(f"Added list {list_name} (+{added} items, {merged} merged).")
+        if selected_item_id is not None:
+            self._restore_proposal_selection(selected_item_id)
+        self._update_alternatives()
 
     def _populate_tables(self) -> None:
         staples_table = self.query_one("#staples", DataTable)
@@ -895,11 +907,7 @@ class KrogetApp(App):
 
     def _update_proposal_status(self) -> None:
         status = self.query_one("#proposal_status", Static)
-        if not self.proposal:
-            status.update("Proposal: 0 items")
-            return
-        sources = ", ".join(self.proposal.sources) if self.proposal.sources else "None"
-        status.update(f"Proposal: {len(self.proposal.items)} items | Sources: {sources}")
+        status.update(_proposal_status_text(self.proposal))
 
     def _update_sent_items(self) -> None:
         items_table = self.query_one("#sent_items", DataTable)
@@ -1073,8 +1081,8 @@ class KrogetApp(App):
         if item and not error:
             updated_upc = _apply_alternatives_to_item(item, alternatives)
         if updated_upc:
-            self._populate_tables()
-            self._restore_proposal_selection(item_id)
+            self._refresh_proposal_ui(selected_item_id=item_id)
+            return
         if self._selected_item_id() == item_id:
             self._update_alternatives()
 
@@ -1131,7 +1139,7 @@ class KrogetApp(App):
             del self.proposal.items[self.selection.proposal_index]
             self.selection.proposal_index = None
             self.selection.alternative_index = None
-            self._populate_tables()
+            self._refresh_proposal_ui()
             self._set_status("Removed item from proposal.")
             return
         self._set_status("Select a staple or proposal item to remove.", error=True)
@@ -1276,8 +1284,7 @@ class KrogetApp(App):
             return
         self.proposal.items = []
         self.proposal.sources = []
-        self._populate_tables()
-        self._update_proposal_status()
+        self._refresh_proposal_ui()
         self._set_status("Proposal cleared.")
 
     def _handle_confirm(self, confirmed: bool) -> None:
@@ -1355,8 +1362,7 @@ class KrogetApp(App):
                 staple.preferred_upc = chosen.upc
                 break
 
-        self._populate_tables()
-        self._update_alternatives()
+        self._refresh_proposal_ui(selected_item_id=id(item))
         self._set_status(f"Pinned UPC {chosen.upc} for {item.name}.")
 
     def _show_search_view(self) -> None:
